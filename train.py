@@ -12,6 +12,8 @@ import math
 parser = argparse.ArgumentParser(description='Train')
 parser.add_argument('--experiment_dir', required=True,
                     help='experiment directory, data, samples,checkpoints,etc')
+parser.add_argument('--experiment_data_dir', type=str, default=None,
+                    help='overwrite data dir path, if data dir is not same with checkpoint dir')
 parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
 parser.add_argument('--image_size', type=int, default=256,
                     help="size of your input and output image")
@@ -59,6 +61,11 @@ def main():
     chkormakedir(checkpoint_dir)
     sample_dir = os.path.join(args.experiment_dir, "sample")
     chkormakedir(sample_dir)
+
+    # overwrite data dir path.
+    if args.experiment_data_dir:
+        data_dir = args.experiment_data_dir
+        print("new data dir path:", data_dir)
 
     start_time = time.time()
 
