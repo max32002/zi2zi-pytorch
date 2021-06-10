@@ -46,18 +46,21 @@ parser.add_argument('--input_nc', type=int, default=1)
 
 parser.add_argument('--from_txt', action='store_true')
 parser.add_argument('--src_txt', type=str, default='大威天龍大羅法咒世尊地藏波若諸佛')
+parser.add_argument('--src_txt_file', type=str, default=None)
 parser.add_argument('--canvas_size', type=int, default=256)
 parser.add_argument('--char_size', type=int, default=256)
 parser.add_argument('--run_all_label', action='store_true')
 parser.add_argument('--label', type=int, default=0)
 parser.add_argument('--src_font', type=str, default='charset/gbk/方正新楷体_GBK(完整).TTF')
 parser.add_argument('--type_file', type=str, default='type/宋黑类字符集.txt')
+parser.add_argument('--crop_src_font', action='store_true')
+parser.add_argument('--resize_canvas_size', type=int, default=0)
+parser.add_argument('--src_font_y_offset', type=int, default=0)
 
-
-def draw_single_char(ch, font, canvas_size):
+def draw_single_char(ch, font, canvas_size, y_offset = 0):
     img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
     draw = ImageDraw.Draw(img)
-    draw.text((0, 0), ch, (0, 0, 0), font=font)
+    draw.text((0, 0 - y_offset), ch, (0, 0, 0), font=font)
     img = img.convert('L')
     return img
 
@@ -92,15 +95,24 @@ def main():
 
     t1 = time.time()
 
+    src_char_list = args.src_txt
+    if args.src_txt_file:
+        if os.path.exists(args.src_txt_file):
+            src_char_list = ""
+            with open(args.src_txt_file, 'r', encoding='utf-8') as fp:
+                for s in fp.readlines():
+                    src_char_list += s.strip()
+        else:
+            print("src_txt_file not fould: %s" % (args.src_txt_file))
+
     if args.from_txt:
-        src = args.src_txt
         font = ImageFont.truetype(args.src_font, size=args.char_size)
         img_list = [transforms.Normalize(0.5, 0.5)(
             transforms.ToTensor()(
-                draw_single_char(ch, font, args.canvas_size)
+                draw_single_char(ch, font, args.canvas_size, args.src_font_y_offset)
             )
-        ).unsqueeze(dim=0) for ch in src]
-        label_list = [args.label for _ in src]
+        ).unsqueeze(dim=0) for ch in src_char_list]
+        label_list = [args.label for _ in src_char_list]
 
         img_list = torch.cat(img_list, dim=0)
         label_list = torch.tensor(label_list)
@@ -132,7 +144,10 @@ def main():
         else:
             # model.set_input(batch[0], batch[2], batch[1])
             # model.optimize_parameters()
-            model.sample(batch, infer_dir)
+            resize_canvas_size = args.canvas_size
+            if args.resize_canvas_size > 0:
+                resize_canvas_size = args.resize_canvas_size
+            model.sample(batch, infer_dir, src_char_list=src_char_list, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size)
             global_steps += 1
 
     t_finish = time.time()

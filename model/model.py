@@ -7,7 +7,7 @@ import os
 from torch.optim.lr_scheduler import StepLR
 from utils.init_net import init_net
 import torchvision.utils as vutils
-
+from PIL import Image
 
 class Zi2ZiModel:
     def __init__(self, input_nc=3, embedding_num=40, embedding_dim=128,
@@ -243,7 +243,7 @@ class Zi2ZiModel:
                 # net.eval()
         print('load model %d' % epoch)
 
-    def sample(self, batch, basename):
+    def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256):
         chk_mkdir(basename)
         cnt = 0
         with torch.no_grad():
@@ -253,7 +253,19 @@ class Zi2ZiModel:
             for label, image_tensor in zip(batch[0], tensor_to_plot):
                 label_dir = os.path.join(basename, str(label.item()))
                 chk_mkdir(label_dir)
-                vutils.save_image(image_tensor, os.path.join(label_dir, str(cnt) + '.png'))
+                image_filename = str(cnt)
+                if src_char_list:
+                    if len(src_char_list) > cnt:
+                        image_filename = src_char_list[cnt]
+                saved_image_path = os.path.join(label_dir, image_filename + '.png')
+                vutils.save_image(image_tensor, saved_image_path)
+                if crop_src_font:
+                    imageObject = Image.open(saved_image_path)
+                    box = (0, 0, canvas_size, canvas_size)
+                    crop = imageObject.crop(box)
+                    if resize_canvas_size > 0:
+                        crop = crop.resize((int(resize_canvas_size), int(resize_canvas_size)), Image.ANTIALIAS)
+                    crop.save(saved_image_path)
                 cnt += 1
             # img = vutils.make_grid(tensor_to_plot)
             # vutils.save_image(tensor_to_plot, basename + "_construct.png")
