@@ -26,6 +26,8 @@ writer_dict = {
 parser = argparse.ArgumentParser(description='Infer')
 parser.add_argument('--experiment_dir', required=True,
                     help='experiment directory, data, samples,checkpoints,etc')
+parser.add_argument('--experiment_checkpoint_dir', type=str, default=None,
+                    help='overwrite checkpoint dir path, if data dir is not same with checkpoint dir')
 parser.add_argument('--start_from', type=int, default=0)
 parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
 parser.add_argument('--image_size', type=int, default=256,
@@ -72,6 +74,11 @@ def main():
     sample_dir = os.path.join(args.experiment_dir, "sample")
     infer_dir = os.path.join(args.experiment_dir, "infer")
     chk_mkdir(infer_dir)
+
+    # overwrite checkpoint dir path.
+    if args.experiment_checkpoint_dir :
+        checkpoint_dir = args.experiment_checkpoint_dir
+        print("access experiment checkpoint object in new path: %s" % (checkpoint_dir))
 
     # train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'), augment=True, bold=True, rotate=True, blur=True)
     # val_dataset = DatasetFromObj(os.path.join(data_dir, 'val.obj'))
