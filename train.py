@@ -14,6 +14,8 @@ parser.add_argument('--experiment_dir', required=True,
                     help='experiment directory, data, samples,checkpoints,etc')
 parser.add_argument('--experiment_data_dir', type=str, default=None,
                     help='overwrite data dir path, if data dir is not same with checkpoint dir')
+parser.add_argument('--experiment_checkpoint_dir', type=str, default=None,
+                    help='overwrite checkpoint dir path, if data dir is not same with checkpoint dir')
 parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
 parser.add_argument('--image_size', type=int, default=256,
                     help="size of your input and output image")
@@ -65,7 +67,12 @@ def main():
     # overwrite data dir path.
     if args.experiment_data_dir:
         data_dir = args.experiment_data_dir
-        print("new data dir path:", data_dir)
+        print("access data object at path: %s" % (data_dir))
+
+    # overwrite checkpoint dir path.
+    if args.experiment_checkpoint_dir :
+        checkpoint_dir = args.experiment_checkpoint_dir
+        print("access checkpoint object at path: %s" % (checkpoint_dir))
 
     start_time = time.time()
 

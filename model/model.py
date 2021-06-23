@@ -243,7 +243,7 @@ class Zi2ZiModel:
                 # net.eval()
         print('load model %d' % epoch)
 
-    def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256):
+    def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256, filename_mode="seq"):
         chk_mkdir(basename)
         cnt = 0
         with torch.no_grad():
@@ -253,10 +253,19 @@ class Zi2ZiModel:
             for label, image_tensor in zip(batch[0], tensor_to_plot):
                 label_dir = os.path.join(basename, str(label.item()))
                 chk_mkdir(label_dir)
+                # for seq.
                 image_filename = str(cnt)
-                if src_char_list:
-                    if len(src_char_list) > cnt:
-                        image_filename = src_char_list[cnt]
+                if filename_mode != "seq":
+                    if src_char_list:
+                        if len(src_char_list) > cnt:
+                            if filename_mode == "char":
+                                image_filename = src_char_list[cnt]
+                            if filename_mode == "unicode_hex":
+                                image_filename = str(hex(ord(src_char_list[cnt])))
+                                if len(image_filename) > 0:
+                                    image_filename = image_filename[2:]
+                            if filename_mode == "unicode_int":
+                                image_filename = str(ord(src_char_list[cnt]))
                 saved_image_path = os.path.join(label_dir, image_filename + '.png')
                 vutils.save_image(image_tensor, saved_image_path)
                 if crop_src_font:

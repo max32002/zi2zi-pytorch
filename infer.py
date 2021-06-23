@@ -47,6 +47,13 @@ parser.add_argument('--obj_path', type=str, default='./experiment/data/val.obj',
 parser.add_argument('--input_nc', type=int, default=1)
 
 parser.add_argument('--from_txt', action='store_true')
+parser.add_argument('--generate_filename_mode', type=str, choices=['seq', 'char', 'unicode_hex', 'unicode_int'], required=True,
+                    help='generate filename mode.\n'
+                         'use seq for sequence.\n'
+                         'use char for character.\n'
+                         'use unicode_hex for unicode hex .\n'
+                         'use unicode_hex for unicode decimal.'
+                    )
 parser.add_argument('--src_txt', type=str, default='大威天龍大羅法咒世尊地藏波若諸佛')
 parser.add_argument('--src_txt_file', type=str, default=None)
 parser.add_argument('--canvas_size', type=int, default=256)
@@ -78,7 +85,7 @@ def main():
     # overwrite checkpoint dir path.
     if args.experiment_checkpoint_dir :
         checkpoint_dir = args.experiment_checkpoint_dir
-        print("access experiment checkpoint object in new path: %s" % (checkpoint_dir))
+        print("access checkpoint object at path: %s" % (checkpoint_dir))
 
     # train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'), augment=True, bold=True, rotate=True, blur=True)
     # val_dataset = DatasetFromObj(os.path.join(data_dir, 'val.obj'))
@@ -154,7 +161,7 @@ def main():
             resize_canvas_size = args.canvas_size
             if args.resize_canvas_size > 0:
                 resize_canvas_size = args.resize_canvas_size
-            model.sample(batch, infer_dir, src_char_list=src_char_list, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size)
+            model.sample(batch, infer_dir, src_char_list=src_char_list, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size, filename_mode=args.generate_filename_mode)
             global_steps += 1
 
     t_finish = time.time()
