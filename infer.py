@@ -47,12 +47,13 @@ parser.add_argument('--obj_path', type=str, default='./experiment/data/val.obj',
 parser.add_argument('--input_nc', type=int, default=1)
 
 parser.add_argument('--from_txt', action='store_true')
-parser.add_argument('--generate_filename_mode', type=str, choices=['seq', 'char', 'unicode_hex', 'unicode_int'], required=True,
+parser.add_argument('--generate_filename_mode', type=str, choices=['seq', 'char', 'unicode_hex', 'unicode_int'], 
                     help='generate filename mode.\n'
                          'use seq for sequence.\n'
                          'use char for character.\n'
                          'use unicode_hex for unicode hex .\n'
-                         'use unicode_hex for unicode decimal.'
+                         'use unicode_hex for unicode decimal.',
+                    default="seq",
                     )
 parser.add_argument('--src_txt', type=str, default='大威天龍大羅法咒世尊地藏波若諸佛')
 parser.add_argument('--src_txt_file', type=str, default=None)
@@ -87,9 +88,6 @@ def main():
         checkpoint_dir = args.experiment_checkpoint_dir
         print("access checkpoint object at path: %s" % (checkpoint_dir))
 
-    # train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'), augment=True, bold=True, rotate=True, blur=True)
-    # val_dataset = DatasetFromObj(os.path.join(data_dir, 'val.obj'))
-    # dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     t0 = time.time()
 
@@ -119,7 +117,11 @@ def main():
         else:
             print("src_txt_file not fould: %s" % (args.src_txt_file))
 
+    final_batch_size = args.batch_size
     if args.from_txt:
+        if final_batch_size < len(src_char_list):
+            final_batch_size = len(src_char_list)
+
         font = ImageFont.truetype(args.src_font, size=args.char_size)
         img_list = [transforms.Normalize(0.5, 0.5)(
             transforms.ToTensor()(
@@ -132,13 +134,13 @@ def main():
         label_list = torch.tensor(label_list)
 
         dataset = TensorDataset(label_list, img_list, img_list)
-        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+        dataloader = DataLoader(dataset, batch_size=final_batch_size, shuffle=False)
 
     else:
         val_dataset = DatasetFromObj(os.path.join(data_dir, 'val.obj'),
                                      input_nc=args.input_nc,
                                      start_from=args.start_from)
-        dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+        dataloader = DataLoader(val_dataset, batch_size=final_batch_size, shuffle=False)
 
     global_steps = 0
     with open(args.type_file, 'r', encoding='utf-8') as fp:
