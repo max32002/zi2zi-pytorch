@@ -84,6 +84,10 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
 def draw_font2font_example(ch, src_font, dst_font, canvas_size, x_offset, y_offset, filter_hashes):
     dst_img = draw_single_char(ch, dst_font, canvas_size, x_offset, y_offset)
     # check the filter example in the hashes or not
+    if dst_img is None:
+        print("draw fail at char: %s" % (ch))
+        return None
+        
     dst_hash = hash(dst_img.tobytes())
     if dst_hash in filter_hashes:
         return None
