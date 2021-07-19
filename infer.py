@@ -70,7 +70,7 @@ parser.add_argument('--crop_src_font', action='store_true')
 parser.add_argument('--resize_canvas_size', type=int, default=0)
 parser.add_argument('--src_font_y_offset', type=int, default=0)
 parser.add_argument('--resume_from_round', type=int, default=1)
-parser.add_argument('--each_loop_length', type=int, default=500)
+parser.add_argument('--each_loop_length', type=int, default=200)
 
 def draw_single_char(ch, font, canvas_size, y_offset = 0):
     img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
