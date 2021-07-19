@@ -2,6 +2,7 @@ from data import DatasetFromObj
 from torch.utils.data import DataLoader, TensorDataset
 from model import Zi2ZiModel
 import os
+from os.path import expanduser
 import argparse
 import torch
 import random
@@ -27,7 +28,9 @@ parser = argparse.ArgumentParser(description='Infer')
 parser.add_argument('--experiment_dir', required=True,
                     help='experiment directory, data, samples,checkpoints,etc')
 parser.add_argument('--experiment_checkpoint_dir', type=str, default=None,
-                    help='overwrite checkpoint dir path, if data dir is not same with checkpoint dir')
+                    help='overwrite checkpoint dir path')
+parser.add_argument('--experiment_infer_dir', type=str, default=None,
+                    help='overwrite infer dir path')
 parser.add_argument('--start_from', type=int, default=0)
 parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
 parser.add_argument('--image_size', type=int, default=256,
@@ -66,6 +69,8 @@ parser.add_argument('--type_file', type=str, default='type/宋黑类字符集.tx
 parser.add_argument('--crop_src_font', action='store_true')
 parser.add_argument('--resize_canvas_size', type=int, default=0)
 parser.add_argument('--src_font_y_offset', type=int, default=0)
+parser.add_argument('--resume_from_round', type=int, default=1)
+parser.add_argument('--each_loop_length', type=int, default=500)
 
 def draw_single_char(ch, font, canvas_size, y_offset = 0):
     img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
@@ -81,6 +86,13 @@ def main():
     checkpoint_dir = os.path.join(args.experiment_dir, "checkpoint")
     sample_dir = os.path.join(args.experiment_dir, "sample")
     infer_dir = os.path.join(args.experiment_dir, "infer")
+
+    # overwrite checkpoint dir path.
+    if args.experiment_infer_dir :
+        infer_dir = args.experiment_infer_dir
+        if(infer_dir[:2]=='~/'):
+            infer_dir = os.path.expanduser(infer_dir)
+        print("generate infer images at path: %s" % (infer_dir))
     chk_mkdir(infer_dir)
 
     # overwrite checkpoint dir path.
@@ -108,63 +120,96 @@ def main():
     t1 = time.time()
 
     src_char_list = args.src_txt
-    if args.src_txt_file:
-        if os.path.exists(args.src_txt_file):
+    text_filepath = args.src_txt_file
+    if text_filepath:
+        is_file_exist = False
+        if(text_filepath[:2]=='~/'):
+            text_filepath = os.path.expanduser(text_filepath)
+        is_file_exist = os.path.exists(text_filepath)
+
+        if is_file_exist:
             src_char_list = ""
-            with open(args.src_txt_file, 'r', encoding='utf-8') as fp:
+            with open(text_filepath, 'r', encoding='utf-8') as fp:
                 for s in fp.readlines():
                     src_char_list += s.strip()
         else:
-            print("src_txt_file not fould: %s" % (args.src_txt_file))
-
-    final_batch_size = args.batch_size
-    if args.from_txt:
-        if final_batch_size < len(src_char_list):
-            final_batch_size = len(src_char_list)
-
-        font = ImageFont.truetype(args.src_font, size=args.char_size)
-        img_list = [transforms.Normalize(0.5, 0.5)(
-            transforms.ToTensor()(
-                draw_single_char(ch, font, args.canvas_size, args.src_font_y_offset)
-            )
-        ).unsqueeze(dim=0) for ch in src_char_list]
-        label_list = [args.label for _ in src_char_list]
-
-        img_list = torch.cat(img_list, dim=0)
-        label_list = torch.tensor(label_list)
-
-        dataset = TensorDataset(label_list, img_list, img_list)
-        dataloader = DataLoader(dataset, batch_size=final_batch_size, shuffle=False)
-
-    else:
-        val_dataset = DatasetFromObj(os.path.join(data_dir, 'val.obj'),
-                                     input_nc=args.input_nc,
-                                     start_from=args.start_from)
-        dataloader = DataLoader(val_dataset, batch_size=final_batch_size, shuffle=False)
+            print("src_txt_file not fould: %s" % (text_filepath))
 
     global_steps = 0
     with open(args.type_file, 'r', encoding='utf-8') as fp:
         fonts = [s.strip() for s in fp.readlines()]
     writer_dict = {v: k for k, v in enumerate(fonts)}
 
-    for batch in dataloader:
-        if args.run_all_label:
-            # global writer_dict
-            writer_dict_inv = {v: k for k, v in writer_dict.items()}
-            for label_idx in range(29):
-                model.set_input(torch.ones_like(batch[0]) * label_idx, batch[2], batch[1])
-                model.forward()
-                tensor_to_plot = torch.cat([model.fake_B, model.real_B], 3)
-                # img = vutils.make_grid(tensor_to_plot)
-                save_image(tensor_to_plot, os.path.join(infer_dir, "infer_{}".format(writer_dict_inv[label_idx]) + "_construct.png"))
+    final_batch_size = args.batch_size
+
+    total_length = 1
+    if args.from_txt:
+        total_length = len(src_char_list)
+
+    each_loop_length = args.each_loop_length
+    resume_from_round = args.resume_from_round
+
+    total_round = int(total_length/each_loop_length) + 1
+
+    if total_round > 1:
+        print("Total round: %d" % (total_round))
+
+    for current_round in range(total_round):
+        if total_round > 1:
+            print("Current round: %d" % (current_round+1))
+
+        current_round_text = ""
+        if args.from_txt:
+            if (current_round+1) < resume_from_round:
+                continue
+            current_round_text = src_char_list[current_round*each_loop_length:(current_round+1)*each_loop_length]
+            current_round_length = len(current_round_text)
+            if final_batch_size < current_round_length:
+                final_batch_size = current_round_length
+
+            font = ImageFont.truetype(args.src_font, size=args.char_size)
+            if total_round > 1:
+                print("Start to draw char at round: %d/%d" % (current_round+1,total_round))
+            img_list = [transforms.Normalize(0.5, 0.5)(
+                transforms.ToTensor()(
+                    draw_single_char(ch, font, args.canvas_size, args.src_font_y_offset)
+                )
+            ).unsqueeze(dim=0) for ch in current_round_text]
+            label_list = [args.label for _ in current_round_text]
+            if total_round > 1:
+                print("Start to infer char at round: %d/%d" % (current_round+1,total_round))
+
+            img_list = torch.cat(img_list, dim=0)
+            label_list = torch.tensor(label_list)
+
+            dataset = TensorDataset(label_list, img_list, img_list)
+            dataloader = DataLoader(dataset, batch_size=final_batch_size, shuffle=False)
+
         else:
-            # model.set_input(batch[0], batch[2], batch[1])
-            # model.optimize_parameters()
-            resize_canvas_size = args.canvas_size
-            if args.resize_canvas_size > 0:
-                resize_canvas_size = args.resize_canvas_size
-            model.sample(batch, infer_dir, src_char_list=src_char_list, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size, filename_mode=args.generate_filename_mode)
-            global_steps += 1
+            val_dataset = DatasetFromObj(os.path.join(data_dir, 'val.obj'),
+                                         input_nc=args.input_nc,
+                                         start_from=args.start_from)
+            dataloader = DataLoader(val_dataset, batch_size=final_batch_size, shuffle=False)
+
+        for batch in dataloader:
+            if args.run_all_label:
+                # global writer_dict
+                writer_dict_inv = {v: k for k, v in writer_dict.items()}
+                for label_idx in range(29):
+                    model.set_input(torch.ones_like(batch[0]) * label_idx, batch[2], batch[1])
+                    model.forward()
+                    tensor_to_plot = torch.cat([model.fake_B, model.real_B], 3)
+                    # img = vutils.make_grid(tensor_to_plot)
+                    save_image(tensor_to_plot, os.path.join(infer_dir, "infer_{}".format(writer_dict_inv[label_idx]) + "_construct.png"))
+            else:
+                # model.set_input(batch[0], batch[2], batch[1])
+                # model.optimize_parameters()
+                resize_canvas_size = args.canvas_size
+                if args.resize_canvas_size > 0:
+                    resize_canvas_size = args.resize_canvas_size
+                model.sample(batch, infer_dir, src_char_list=current_round_text, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size, filename_mode=args.generate_filename_mode)
+                print("done sample, goto next round")
+                global_steps += 1
 
     t_finish = time.time()
 
