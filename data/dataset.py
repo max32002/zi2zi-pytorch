@@ -61,9 +61,9 @@ class DatasetFromObj(data.Dataset):
                 nw = int(multiplier * w) + 1
                 nh = int(multiplier * h) + 1
 
-                # Used to use Image.BICUBIC, change to ANTIALIAS, get better image.
-                img_A = img_A.resize((nw, nh), Image.ANTIALIAS)
-                img_B = img_B.resize((nw, nh), Image.ANTIALIAS)
+                # Used to use Image.BICUBIC, change to BILINEAR, get better image.
+                img_A = img_A.resize((nw, nh), Image.BILINEAR)
+                img_B = img_B.resize((nw, nh), Image.BILINEAR)
 
                 shift_x = random.randint(0, max(nw - w - 1, 0))
                 shift_y = random.randint(0, max(nh - h - 1, 0))

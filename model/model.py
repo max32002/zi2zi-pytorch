@@ -273,7 +273,7 @@ class Zi2ZiModel:
                     box = (0, 0, canvas_size, canvas_size)
                     crop = imageObject.crop(box)
                     if resize_canvas_size > 0:
-                        crop = crop.resize((int(resize_canvas_size), int(resize_canvas_size)), Image.ANTIALIAS)
+                        crop = crop.resize((int(resize_canvas_size), int(resize_canvas_size)), Image.BILINEAR)
                     crop.save(saved_image_path)
                 cnt += 1
             # img = vutils.make_grid(tensor_to_plot)

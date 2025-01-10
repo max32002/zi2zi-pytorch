@@ -59,7 +59,7 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
     # img = nn.ZeroPad2d(m)(img) #直接填0
     img = img.squeeze(0)  # 去轴
     img = transforms.ToPILImage()(img)
-    img = img.resize((canvas_size, canvas_size), Image.ANTIALIAS)
+    img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
     return img
 
 
