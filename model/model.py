@@ -237,9 +237,9 @@ class Zi2ZiModel:
                 net = getattr(self, 'net' + name)
 
                 if self.gpu_ids and torch.cuda.is_available():
-                    net.load_state_dict(torch.load(load_path))
+                    net.load_state_dict(torch.load(load_path, weights_only=True))
                 else:
-                    net.load_state_dict(torch.load(load_path,map_location=torch.device('cpu')))
+                    net.load_state_dict(torch.load(load_path, map_location=torch.device('cpu'), weights_only=True))
                 # net.eval()
         print('load model %d' % epoch)
 
