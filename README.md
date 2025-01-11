@@ -34,14 +34,14 @@ Download tons of fonts as you please
 
 We use the environment below:
 
-* Python 3.7
-* CUDA 10.2
-* cudnn 7.6.5
-* pytorch 1.5.1
-* pillow 7.1.2
-* numpy 1.18.1
-* scipy 1.4.1
-* imageio 2.8.0
+* Python 3.9
+* CUDA 11.8
+* cudnn 8.9.7
+* pytorch 2.5.1
+* pillow 11.0.0
+* numpy 1.24.4
+* matplotlib 3.10.0
+* fonttools 4.55.3
 
 ### Preprocess
 To avoid IO bottleneck, preprocessing is necessary to pickle your data into binary and persist in memory during training.
