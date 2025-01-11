@@ -78,7 +78,6 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
     img = img.squeeze(0)  # 去轴
     img = transforms.ToPILImage()(img)
 
-    # DeprecationWarning: BILINEAR is deprecated and will be removed in Pillow 10 (2023-07-01). Use Resampling.LANCZOS instead.
     img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
     return img
 

@@ -82,6 +82,7 @@ def draw_single_char(ch, font, canvas_size, y_offset = 0):
 
 def main():
     args = parser.parse_args()
+    chk_mkdir(args.experiment_dir)
     data_dir = os.path.join(args.experiment_dir, "data")
     checkpoint_dir = os.path.join(args.experiment_dir, "checkpoint")
     sample_dir = os.path.join(args.experiment_dir, "sample")
@@ -92,7 +93,8 @@ def main():
         infer_dir = args.experiment_infer_dir
         if(infer_dir[:2]=='~/'):
             infer_dir = os.path.expanduser(infer_dir)
-        print("generate infer images at path: %s" % (infer_dir))
+    
+    print("generate infer images at path: %s" % (infer_dir))
     chk_mkdir(infer_dir)
 
     # overwrite checkpoint dir path.
@@ -154,11 +156,15 @@ def main():
     if total_round > 1:
         print("Total round: %d" % (total_round))
 
+    
     for current_round in range(total_round):
         if total_round > 1:
             print("Current round: %d" % (current_round+1))
 
         current_round_text = ""
+
+        dataloader = None
+
         if args.from_txt:
             if (current_round+1) < resume_from_round:
                 continue
@@ -210,6 +216,9 @@ def main():
                 model.sample(batch, infer_dir, src_char_list=current_round_text, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size, filename_mode=args.generate_filename_mode)
                 print("done sample, goto next round")
                 global_steps += 1
+
+        del dataloader
+        torch.cuda.empty_cache()
 
     t_finish = time.time()
 
