@@ -82,7 +82,7 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
     return img
 
 
-def draw_checkpoint2font_example(ch, src_path, dst_font, canvas_size, x_offset, y_offset, filter_hashes):
+def draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes):
     dst_img = draw_single_char(ch, dst_font, canvas_size, x_offset, y_offset)
     # check the filter example in the hashes or not
     if dst_img is None:
@@ -100,7 +100,7 @@ def draw_checkpoint2font_example(ch, src_path, dst_font, canvas_size, x_offset, 
 
     src_img = None
     if len(image_filename) > 0:
-        saved_image_path = os.path.join(src_path, image_filename + '.png')
+        saved_image_path = os.path.join(src_infer, image_filename + '.png')
         #print("image_path", saved_image_path)
         if os.path.exists(saved_image_path):
             src_img = Image.open(saved_image_path)
@@ -111,28 +111,6 @@ def draw_checkpoint2font_example(ch, src_path, dst_font, canvas_size, x_offset, 
     example_img.paste(dst_img, (0, 0))
     if src_img:
         example_img.paste(src_img, (canvas_size, 0))
-    # convert to gray img
-    example_img = example_img.convert('L')
-    return example_img
-
-
-def draw_font2imgs_example(ch, src_font, dst_img, canvas_size, x_offset, y_offset):
-    src_img = draw_single_char(ch, src_font, canvas_size, x_offset, y_offset)
-    dst_img = dst_img.resize((canvas_size, canvas_size), Image.BILINEAR).convert('RGB')
-    example_img = Image.new("RGB", (canvas_size * 2, canvas_size), (255, 255, 255))
-    example_img.paste(dst_img, (0, 0))
-    example_img.paste(src_img, (canvas_size, 0))
-    # convert to gray img
-    example_img = example_img.convert('L')
-    return example_img
-
-
-def draw_imgs2imgs_example(src_img, dst_img, canvas_size):
-    src_img = src_img.resize((canvas_size, canvas_size), Image.BILINEAR).convert('RGB')
-    dst_img = dst_img.resize((canvas_size, canvas_size), Image.BILINEAR).convert('RGB')
-    example_img = Image.new("RGB", (canvas_size * 2, canvas_size), (255, 255, 255))
-    example_img.paste(dst_img, (0, 0))
-    example_img.paste(src_img, (canvas_size, 0))
     # convert to gray img
     example_img = example_img.convert('L')
     return example_img
@@ -153,7 +131,7 @@ def filter_recurring_hash(charset, font, canvas_size, x_offset, y_offset):
     return [rh[0] for rh in recurring_hashes]
 
 
-def checkpoint2font(src, dst, charset, char_size, canvas_size,
+def checkpoint2font(src_infer, dst, charset, char_size, canvas_size,
              x_offset, y_offset, sample_count, sample_dir, label=0, filter_by_hash=True):
     dst_font = ImageFont.truetype(dst, size=char_size)
 
@@ -167,7 +145,7 @@ def checkpoint2font(src, dst, charset, char_size, canvas_size,
     for c in charset:
         if count == sample_count:
             break
-        e = draw_checkpoint2font_example(c, src, dst_font, canvas_size, x_offset, y_offset, filter_hashes)
+        e = draw_checkpoint2font_example(c, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes)
         if e:
             e.save(os.path.join(sample_dir, "%d_%04d.jpg" % (label, count)))
             count += 1
@@ -181,8 +159,7 @@ parser.add_argument('--mode', type=str, choices=['checkpoint2font'], required=Tr
                     help='generate mode.\n'
                          'use --src_checkpoint_folder and --dst_font for checkpoint2font mode.\n'
                     )
-parser.add_argument('--src_font', type=str, default=None, help='path of the source font')
-parser.add_argument('--src_fonts_dir', type=str, default=None, help='path of the source fonts')
+parser.add_argument('--src_infer', type=str, default=None, help='path of the source infer image path')
 parser.add_argument('--src_imgs', type=str, default=None, help='path of the source imgs')
 parser.add_argument('--dst_font', type=str, default=None, help='path of the target font')
 parser.add_argument('--dst_imgs', type=str, default=None, help='path of the target imgs')
@@ -205,15 +182,15 @@ if __name__ == "__main__":
     if not os.path.isdir(args.sample_dir):
         os.mkdir(args.sample_dir)
     if args.mode == 'checkpoint2font':
-        if args.src_font is None or args.dst_font is None:
-            raise ValueError('src_font and dst_font are required.')
+        if args.src_infer is None or args.dst_font is None:
+            raise ValueError('src_infer and dst_font are required.')
         if args.charset in ['CN', 'JP', 'KR', 'CN_T']:
             charset = locals().get("%s_CHARSET" % args.charset)
         else:
             charset = list(open(args.charset, encoding='utf-8').readline().strip())
         if args.shuffle:
             np.random.shuffle(charset)
-        checkpoint2font(args.src_font, args.dst_font, charset, args.char_size,
+        checkpoint2font(args.src_infer, args.dst_font, charset, args.char_size,
                   args.canvas_size, args.x_offset, args.y_offset,
                   args.sample_count, args.sample_dir, args.label, args.filter)
     else:

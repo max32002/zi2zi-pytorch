@@ -233,7 +233,8 @@ class Zi2ZiModel:
         for name in ['G', 'D']:
             if isinstance(name, str):
                 load_filename = '%s_net_%s.pth' % (epoch, name)
-                load_path = os.path.join(self.save_dir, load_filename)
+                save_dir_path = os.path.abspath(self.save_dir)
+                load_path = os.path.join(save_dir_path, load_filename)
                 net = getattr(self, 'net' + name)
 
                 if self.gpu_ids and torch.cuda.is_available():
