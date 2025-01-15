@@ -22,6 +22,8 @@ class Discriminator(nn.Module):
         else:
             use_bias = norm_layer != nn.BatchNorm2d
 
+        print("conv2_layer_count", conv2_layer_count)
+
         # as tf implement, kernel_size = 5, use "SAME" padding, so we should use kw = 5 and padw = 2
         # kw = 4
         # padw = 1
@@ -46,14 +48,21 @@ class Discriminator(nn.Module):
 
         nf_mult_prev = nf_mult
         nf_mult = 8
-        sequence += [
-            nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias),
-            norm_layer(ndf * nf_mult),
-            nn.LeakyReLU(0.2, True)
-        ]
         if conv2_layer_count == 4:
+            sequence += [
+                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias),
+                norm_layer(ndf * nf_mult),
+                nn.LeakyReLU(0.2, True)
+            ]
+
             nf_mult_prev = nf_mult
             nf_mult = 16
+            sequence += [
+                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
+                norm_layer(ndf * nf_mult),
+                nn.LeakyReLU(0.2, True)
+            ]
+        else:
             sequence += [
                 nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
                 norm_layer(ndf * nf_mult),
