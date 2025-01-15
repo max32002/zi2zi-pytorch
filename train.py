@@ -50,6 +50,7 @@ parser.add_argument('--random_seed', type=int, default=777,
 parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
 parser.add_argument('--input_nc', type=int, default=3,
                     help='number of input images channels')
+parser.add_argument('--conv2_layer_count', type=int, default=3)
 
 def chkormakedir(path):
     if not os.path.isdir(path):
@@ -74,7 +75,8 @@ def main():
     # overwrite checkpoint dir path.
     if args.experiment_checkpoint_dir :
         checkpoint_dir = args.experiment_checkpoint_dir
-        print("access checkpoint object at path: %s" % (checkpoint_dir))
+        chkormakedir(checkpoint_dir)
+    print("access checkpoint object at path: %s" % (checkpoint_dir))
 
     start_time = time.time()
 
@@ -90,6 +92,7 @@ def main():
         Lconst_penalty=args.Lconst_penalty,
         Lcategory_penalty=args.Lcategory_penalty,
         save_dir=checkpoint_dir,
+        conv2_layer_count=args.conv2_layer_count,
         gpu_ids=args.gpu_ids
     )
     model.setup()

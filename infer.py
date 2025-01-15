@@ -73,6 +73,9 @@ parser.add_argument('--resize_canvas_size', type=int, default=0)
 parser.add_argument('--src_font_y_offset', type=int, default=0)
 parser.add_argument('--resume_from_round', type=int, default=1)
 parser.add_argument('--each_loop_length', type=int, default=200)
+parser.add_argument('--overwrite_exist', type=int, default=1)
+parser.add_argument('--conv2_layer_count', type=int, default=3)
+
 
 def draw_single_char(ch, font, canvas_size, y_offset = 0):
     img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
@@ -115,6 +118,7 @@ def main():
         Lcategory_penalty=args.Lcategory_penalty,
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
+        conv2_layer_count=args.conv2_layer_count,
         is_training=False
     )
     model.setup()
@@ -159,6 +163,8 @@ def main():
         print("Total round: %d" % (total_round))
 
     
+    font = ImageFont.truetype(args.src_font, size=args.char_size)
+    filename_mode = "unicode_int"
     for current_round in range(total_round):
         if total_round > 1:
             print("Current round: %d" % (current_round+1))
@@ -170,25 +176,57 @@ def main():
         if args.from_txt:
             if (current_round+1) < resume_from_round:
                 continue
-            current_round_text = src_char_list[current_round*each_loop_length:(current_round+1)*each_loop_length]
-            current_round_length = len(current_round_text)
-            if final_batch_size < current_round_length:
-                final_batch_size = current_round_length
+            
+            current_round_text_excepted = src_char_list[current_round*each_loop_length:(current_round+1)*each_loop_length]
+            current_round_text_real = ""
 
-            font = ImageFont.truetype(args.src_font, size=args.char_size)
             if total_round > 1:
                 print("Start to draw char at round: %d/%d" % (current_round+1,total_round))
-            img_list = []
-            for ch in current_round_text:
-                img = draw_single_char(ch, font, args.canvas_size, args.src_font_y_offset)
-                img_list.append(transforms.Normalize(0.5, 0.5)(transforms.ToTensor()(
-                    img
-                )).unsqueeze(dim=0))
-            label_list = [args.label for _ in current_round_text]
+            
+            img_list_array = []
+            for ch in current_round_text_excepted:
+                saved_image_exist = False
+
+                image_filename = ""
+                if filename_mode == "unicode_int":
+                    image_filename = str(ord(ch))
+
+                if len(image_filename) > 0:
+                    infer_dir = os.path.abspath(args.experiment_dir)
+                    infer_dir = os.path.join(infer_dir, "infer")
+                    save_dir_path = os.path.join(infer_dir, str(args.label))
+                    saved_image_path = os.path.join(save_dir_path, image_filename + '.png')
+                    #print("ch:", ch, "image_path", saved_image_path)
+                    if os.path.exists(saved_image_path):
+                        saved_image_exist = True
+
+                append_image = True
+
+                if args.overwrite_exist == 0:
+                    if saved_image_exist:
+                        append_image = False
+
+                if append_image:
+                    current_round_text_real += ch
+
+                    img = draw_single_char(ch, font, args.canvas_size, args.src_font_y_offset)
+                    img_list_array.append(transforms.Normalize(0.5, 0.5)(transforms.ToTensor()(
+                        img
+                    )).unsqueeze(dim=0))
+            label_list = [args.label for _ in img_list_array]
             if total_round > 1:
                 print("Start to infer char at round: %d/%d" % (current_round+1,total_round))
 
-            img_list = torch.cat(img_list, dim=0)
+            current_round_length = len(current_round_text_real)
+            if final_batch_size < current_round_length:
+                final_batch_size = current_round_length
+            if current_round_length > 0:
+                current_round_text = current_round_text_real
+            else:
+                print("img_list_array is empty, skip this round")
+                continue
+
+            img_list = torch.cat(img_list_array, dim=0)
             label_list = torch.tensor(label_list)
 
             dataset = TensorDataset(label_list, img_list, img_list)
