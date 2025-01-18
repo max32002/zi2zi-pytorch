@@ -248,7 +248,7 @@ class Zi2ZiModel:
         print('load model %d' % epoch)
 
     def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256, filename_mode="seq"):
-        chk_mkdir(basename)
+        #chk_mkdir(basename)
         cnt = 0
         with torch.no_grad():
             self.set_input(batch[0], batch[2], batch[1])
@@ -256,7 +256,7 @@ class Zi2ZiModel:
             tensor_to_plot = torch.cat([self.fake_B, self.real_B], 3)
             for label, image_tensor in zip(batch[0], tensor_to_plot):
                 label_dir = os.path.join(basename, str(label.item()))
-                chk_mkdir(label_dir)
+                #chk_mkdir(label_dir)
                 # for seq.
                 image_filename = str(cnt)
                 if filename_mode != "seq":

@@ -45,6 +45,7 @@ class DatasetFromObj(data.Dataset):
         image_file = bytes_to_file(img_bytes)
         img = Image.open(image_file)
         try:
+            img = img.convert('L')
             img_A, img_B = read_split_image(img)
             if self.augment:
                 # augment the image by:
