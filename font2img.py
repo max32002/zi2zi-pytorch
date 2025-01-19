@@ -4,6 +4,7 @@ import os
 import sys
 
 import argparse
+import cv2
 import numpy as np
 
 from PIL import Image, ImageFont, ImageDraw
@@ -81,6 +82,19 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
     img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
     return img
 
+def convert_to_gray_binary(example_img, ksize=1, threshold=127):
+    ksize = 0
+    opencvImage = cv2.cvtColor(np.array(example_img), cv2.COLOR_RGB2BGR)
+    blurred = None
+    if ksize > 0:
+        blurred = cv2.GaussianBlur(opencvImage, (ksize, ksize), 0)
+    else:
+        blurred = opencvImage
+    ret, example_img = cv2.threshold(blurred, threshold, 255, cv2.THRESH_BINARY)
+
+    # conver to gray
+    example_img = cv2.cvtColor(example_img, cv2.COLOR_BGR2GRAY)
+    return example_img
 
 def draw_font2font_example(ch, src_font, dst_font, canvas_size, x_offset, y_offset, filter_hashes):
     dst_img = draw_single_char(ch, dst_font, canvas_size, x_offset, y_offset)
@@ -96,8 +110,12 @@ def draw_font2font_example(ch, src_font, dst_font, canvas_size, x_offset, y_offs
     example_img = Image.new("RGB", (canvas_size * 2, canvas_size), (255, 255, 255))
     example_img.paste(dst_img, (0, 0))
     example_img.paste(src_img, (canvas_size, 0))
+
     # convert to gray img
-    example_img = example_img.convert('L')
+    #example_img = example_img.convert('L')
+
+    example_img = convert_to_gray_binary(example_img, 1, 127)
+
     return example_img
 
 
@@ -107,8 +125,12 @@ def draw_font2imgs_example(ch, src_font, dst_img, canvas_size, x_offset, y_offse
     example_img = Image.new("RGB", (canvas_size * 2, canvas_size), (255, 255, 255))
     example_img.paste(dst_img, (0, 0))
     example_img.paste(src_img, (canvas_size, 0))
+    
     # convert to gray img
-    example_img = example_img.convert('L')
+    #example_img = example_img.convert('L')
+
+    example_img = convert_to_gray_binary(example_img, 0, 127)
+
     return example_img
 
 
@@ -154,8 +176,10 @@ def font2font(src, dst, charset, char_size, canvas_size,
         if count == sample_count:
             break
         e = draw_font2font_example(c, src_font, dst_font, canvas_size, x_offset, y_offset, filter_hashes)
-        if e:
-            e.save(os.path.join(sample_dir, "%d_%04d.jpg" % (label, count)))
+        if not e is None:
+            target_path = os.path.join(sample_dir, "%d_%04d.png" % (label, count))
+            #e.save(target_path)
+            cv2.imwrite(target_path, e)
             count += 1
             if count % 500 == 0:
                 print("processed %d chars" % count)
@@ -188,8 +212,10 @@ def font2imgs(src, dst, char_size, canvas_size,
         img_path = os.path.join(dst, c)
         dst_img = Image.open(img_path)
         e = draw_font2imgs_example(ch, src_font, dst_img, canvas_size, x_offset, y_offset)
-        if e:
-            e.save(os.path.join(sample_dir, "%d_%04d.jpg" % (label, count)))
+        if not e is None:        
+            target_path = os.path.join(sample_dir, "%d_%04d.png" % (label, count))
+            #e.save(target_path)
+            cv2.imwrite(target_path, e)
             count += 1
 
 
@@ -238,7 +264,7 @@ def fonts2imgs(src_fonts_dir, dst, char_size, canvas_size,
         else:
             e = None
         if e:
-            e.save(os.path.join(sample_dir, "%d_%04d.jpg" % (label, count)))
+            e.save(os.path.join(sample_dir, "%d_%04d.png" % (label, count)))
             count += 1
 
 
@@ -294,7 +320,7 @@ def imgs2imgs(src, dst, canvas_size, sample_count, sample_dir):
         dst_img = Image.open(img_path)
         e = draw_imgs2imgs_example(src_img, dst_img, canvas_size)
         if e:
-            e.save(os.path.join(sample_dir, "%d_%04d.jpg" % (label, count)))
+            e.save(os.path.join(sample_dir, "%d_%04d.png" % (label, count)))
             count += 1
 
 
@@ -332,6 +358,8 @@ if __name__ == "__main__":
     if not os.path.isdir(args.sample_dir):
         os.mkdir(args.sample_dir)
     if args.mode == 'font2font':
+        charset = []
+
         if args.src_font is None or args.dst_font is None:
             raise ValueError('src_font and dst_font are required.')
         if args.charset in ['CN', 'JP', 'KR', 'CN_T']:

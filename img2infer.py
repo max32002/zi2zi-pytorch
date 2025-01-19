@@ -51,7 +51,7 @@ parser.add_argument('--generate_filename_mode', type=str, choices=['seq', 'char'
                          'use unicode_hex for unicode decimal.',
                     default="seq",
                     )
-parser.add_argument('--src_txt', type=str, default='大威天龍大羅法咒世尊地藏波若諸佛')
+parser.add_argument('--src_txt', type=str, default='')
 parser.add_argument('--src_txt_file', type=str, default=None)
 parser.add_argument('--canvas_size', type=int, default=256)
 parser.add_argument('--char_size', type=int, default=256)
@@ -81,6 +81,7 @@ def main():
     checkpoint_dir = os.path.join(args.experiment_dir, "checkpoint")
     sample_dir = os.path.join(args.experiment_dir, "sample")
     infer_dir = os.path.join(args.experiment_dir, "infer")
+    input_img_path = os.path.abspath(args.src_infer)
 
     # overwrite checkpoint dir path.
     if args.experiment_infer_dir :
@@ -90,6 +91,9 @@ def main():
     
     print("generate infer images at path: %s" % (infer_dir))
     chk_mkdir(infer_dir)
+
+    infer_with_label_dir = os.path.join(infer_dir, str(args.label))
+    chk_mkdir(infer_with_label_dir)
 
     # overwrite checkpoint dir path.
     if args.experiment_checkpoint_dir :
@@ -116,6 +120,7 @@ def main():
 
     t1 = time.time()
 
+    filename_mode = "unicode_int"
     src_char_list = args.src_txt
     text_filepath = args.src_txt_file
     if text_filepath:
@@ -126,11 +131,23 @@ def main():
 
         if is_file_exist:
             src_char_list = ""
+            char_array = []
             with open(text_filepath, 'r', encoding='utf-8') as fp:
                 for s in fp.readlines():
-                    src_char_list += s.strip()
+                    char_array.append(s.strip())
+            src_char_list = ''.join(char_array)
         else:
             print("src_txt_file not fould: %s" % (text_filepath))
+
+    if src_char_list == "":
+        target_folder_list = os.listdir(input_img_path)
+        char_array = []
+        for item in target_folder_list:
+            if item.endswith(".png"):
+                #print("image file name", item)
+                char_string = item.replace(".png","")
+                char_array.append(chr(int(char_string)))
+        src_char_list = ''.join(char_array)
 
     global_steps = 0
     with open(args.type_file, 'r', encoding='utf-8') as fp:
@@ -138,7 +155,7 @@ def main():
 
     final_batch_size = args.batch_size
 
-    total_length = 1
+    total_length = 0
     if args.from_txt:
         total_length = len(src_char_list)
 
@@ -149,9 +166,7 @@ def main():
 
     if total_round > 1:
         print("Total round: %d" % (total_round))
-
     
-    filename_mode = "unicode_int"
     for current_round in range(total_round):
         if total_round > 1:
             print("Current round: %d" % (current_round+1))
@@ -175,14 +190,13 @@ def main():
 
                 src_img = None
                 if len(image_filename) > 0:
-                    save_dir_path = os.path.abspath(args.src_infer)
-                    saved_image_path = os.path.join(save_dir_path, image_filename + '.png')
-                    #print("ch:", ch, "image_path", saved_image_path)
-                    if os.path.exists(saved_image_path):
-                        src_img = Image.open(saved_image_path)
+                    input_image_path = os.path.join(input_img_path, image_filename + '.png')
+                    #print("ch:", ch, "image_path", input_image_path)
+                    if os.path.exists(input_image_path):
+                        src_img = Image.open(input_image_path)
                         src_img = src_img.convert('L')
                     else:
-                        print("image path not exsit:", saved_image_path)
+                        print("image path not exsit:", input_image_path)
                     
                 if src_img:
                     current_round_text_real += ch

@@ -4,6 +4,7 @@ import os
 import sys
 
 import argparse
+import cv2
 import numpy as np
 
 from PIL import Image, ImageFont, ImageDraw
@@ -18,23 +19,6 @@ from torch import nn
 from torchvision import transforms
 
 from utils.charset_util import processGlyphNames
-
-CN_CHARSET = None
-CN_T_CHARSET = None
-JP_CHARSET = None
-KR_CHARSET = None
-
-DEFAULT_CHARSET = "./charset/cjk.json"
-
-
-def load_global_charset():
-    global CN_CHARSET, JP_CHARSET, KR_CHARSET, CN_T_CHARSET
-    cjk = json.load(open(DEFAULT_CHARSET))
-    CN_CHARSET = cjk["gbk"]
-    JP_CHARSET = cjk["jp"]
-    KR_CHARSET = cjk["kr"]
-    CN_T_CHARSET = cjk["gb2312_t"]
-
 
 def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
     img = Image.new("L", (canvas_size * 2, canvas_size * 2), 0)
@@ -81,6 +65,19 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
     img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
     return img
 
+def convert_to_gray_binary(example_img, ksize=1, threshold=127):
+    ksize = 0
+    opencvImage = cv2.cvtColor(np.array(example_img), cv2.COLOR_RGB2BGR)
+    blurred = None
+    if ksize > 0:
+        blurred = cv2.GaussianBlur(opencvImage, (ksize, ksize), 0)
+    else:
+        blurred = opencvImage
+    ret, example_img = cv2.threshold(blurred, threshold, 255, cv2.THRESH_BINARY)
+
+    # conver to gray
+    example_img = cv2.cvtColor(example_img, cv2.COLOR_BGR2GRAY)
+    return example_img
 
 def draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes):
     dst_img = draw_single_char(ch, dst_font, canvas_size, x_offset, y_offset)
@@ -111,8 +108,12 @@ def draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset,
     example_img.paste(dst_img, (0, 0))
     if src_img:
         example_img.paste(src_img, (canvas_size, 0))
+    
     # convert to gray img
-    example_img = example_img.convert('L')
+    #example_img = example_img.convert('L')
+
+    example_img = convert_to_gray_binary(example_img, 1, 127)
+
     return example_img
 
 
@@ -146,14 +147,16 @@ def checkpoint2font(src_infer, dst, charset, char_size, canvas_size,
         if count == sample_count:
             break
         e = draw_checkpoint2font_example(c, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes)
-        if e:
-            e.save(os.path.join(sample_dir, "%d_%04d.jpg" % (label, count)))
+        if not e is None:        
+            target_path = os.path.join(sample_dir, "%d_%04d.png" % (label, count))
+            #e.save(target_path)
+            cv2.imwrite(target_path, e)
+
             count += 1
             if count % 500 == 0:
                 print("processed %d chars" % count)
 
 
-load_global_charset()
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', type=str, choices=['checkpoint2font'], required=True,
                     help='generate mode.\n'
@@ -165,8 +168,8 @@ parser.add_argument('--dst_font', type=str, default=None, help='path of the targ
 parser.add_argument('--dst_imgs', type=str, default=None, help='path of the target imgs')
 
 parser.add_argument('--filter', default=False, action='store_true', help='filter recurring characters')
-parser.add_argument('--charset', type=str, default='CN',
-                    help='charset, can be either: CN, JP, KR or a one line file. ONLY VALID IN font2font mode.')
+parser.add_argument('--charset', type=str,
+                    help='charset, a one line file.')
 parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle a charset before processings')
 parser.add_argument('--char_size', type=int, default=256, help='character size')
 parser.add_argument('--canvas_size', type=int, default=256, help='canvas size')
@@ -179,15 +182,26 @@ parser.add_argument('--label', type=int, default=0, help='label as the prefix of
 args = parser.parse_args()
 
 if __name__ == "__main__":
+    input_img_path = os.path.abspath(args.src_infer)
+
     if not os.path.isdir(args.sample_dir):
         os.mkdir(args.sample_dir)
     if args.mode == 'checkpoint2font':
+        charset = []
         if args.src_infer is None or args.dst_font is None:
             raise ValueError('src_infer and dst_font are required.')
-        if args.charset in ['CN', 'JP', 'KR', 'CN_T']:
-            charset = locals().get("%s_CHARSET" % args.charset)
-        else:
+        if args.charset:
             charset = list(open(args.charset, encoding='utf-8').readline().strip())
+        else:
+            # auto
+            if len(charset) == 0:
+                target_folder_list = os.listdir(input_img_path)
+                for item in target_folder_list:
+                    if item.endswith(".png"):
+                        #print("image file name", item)
+                        char_string = item.replace(".png","")
+                        charset.append(chr(int(char_string)))
+
         if args.shuffle:
             np.random.shuffle(charset)
         checkpoint2font(args.src_infer, args.dst_font, charset, args.char_size,

@@ -60,7 +60,7 @@ parser.add_argument('--generate_filename_mode', type=str, choices=['seq', 'char'
                          'use unicode_hex for unicode decimal.',
                     default="seq",
                     )
-parser.add_argument('--src_txt', type=str, default='大威天龍大羅法咒世尊地藏波若諸佛')
+parser.add_argument('--src_txt', type=str, default='')
 parser.add_argument('--src_txt_file', type=str, default=None)
 parser.add_argument('--canvas_size', type=int, default=256)
 parser.add_argument('--char_size', type=int, default=256)
@@ -102,6 +102,9 @@ def main():
     print("generate infer images at path: %s" % (infer_dir))
     chk_mkdir(infer_dir)
 
+    infer_with_label_dir = os.path.join(infer_dir, str(args.label))
+    chk_mkdir(infer_with_label_dir)
+
     # overwrite checkpoint dir path.
     if args.experiment_checkpoint_dir :
         checkpoint_dir = args.experiment_checkpoint_dir
@@ -137,9 +140,11 @@ def main():
 
         if is_file_exist:
             src_char_list = ""
+            char_array = []
             with open(text_filepath, 'r', encoding='utf-8') as fp:
                 for s in fp.readlines():
-                    src_char_list += s.strip()
+                    char_array.append(s.strip())
+            src_char_list = ''.join(char_array)
         else:
             print("src_txt_file not fould: %s" % (text_filepath))
 
@@ -150,7 +155,7 @@ def main():
 
     final_batch_size = args.batch_size
 
-    total_length = 1
+    total_length = 0
     if args.from_txt:
         total_length = len(src_char_list)
 
@@ -192,10 +197,7 @@ def main():
                     image_filename = str(ord(ch))
 
                 if len(image_filename) > 0:
-                    infer_dir = os.path.abspath(args.experiment_dir)
-                    infer_dir = os.path.join(infer_dir, "infer")
-                    save_dir_path = os.path.join(infer_dir, str(args.label))
-                    saved_image_path = os.path.join(save_dir_path, image_filename + '.png')
+                    saved_image_path = os.path.join(infer_with_label_dir, image_filename + '.png')
                     #print("ch:", ch, "image_path", saved_image_path)
                     if os.path.exists(saved_image_path):
                         saved_image_exist = True
