@@ -10,7 +10,9 @@ import torch
 import random
 import time
 import math
+import cv2
 import numpy as np
+
 from PIL import Image, ImageDraw, ImageFont
 import torchvision.transforms as transforms
 from torchvision.utils import save_image, make_grid
@@ -75,6 +77,22 @@ parser.add_argument('--resume_from_round', type=int, default=1)
 parser.add_argument('--each_loop_length', type=int, default=200)
 parser.add_argument('--overwrite_exist', type=int, default=1)
 parser.add_argument('--conv2_layer_count', type=int, default=3)
+parser.add_argument('--anti_alias', type=int, default=1)
+parser.add_argument('--image_ext', type=str, default='png', help='infer image format')
+
+
+def convert_to_gray_binary(example_img, ksize=1, threshold=127):
+    opencvImage = cv2.cvtColor(np.array(example_img), cv2.COLOR_RGB2BGR)
+    blurred = None
+    if ksize > 0:
+        blurred = cv2.GaussianBlur(opencvImage, (ksize, ksize), 0)
+    else:
+        blurred = opencvImage
+    ret, example_img = cv2.threshold(blurred, threshold, 255, cv2.THRESH_BINARY)
+
+    # conver to gray
+    example_img = cv2.cvtColor(example_img, cv2.COLOR_BGR2GRAY)
+    return example_img
 
 
 def draw_single_char(ch, font, canvas_size, y_offset = 0):
@@ -82,6 +100,8 @@ def draw_single_char(ch, font, canvas_size, y_offset = 0):
     draw = ImageDraw.Draw(img)
     draw.text((0, 0 - y_offset), ch, (0, 0, 0), font=font)
     img = img.convert('L')
+
+    img = convert_to_gray_binary(img, 0, 127)
     return img
 
 
@@ -166,10 +186,11 @@ def main():
 
     if total_round > 1:
         print("Total round: %d" % (total_round))
-
     
     font = ImageFont.truetype(args.src_font, size=args.char_size)
     filename_mode = "unicode_int"
+    image_ext = "png"
+    
     for current_round in range(total_round):
         if total_round > 1:
             print("Current round: %d" % (current_round+1))
@@ -197,7 +218,7 @@ def main():
                     image_filename = str(ord(ch))
 
                 if len(image_filename) > 0:
-                    saved_image_path = os.path.join(infer_with_label_dir, image_filename + '.png')
+                    saved_image_path = os.path.join(infer_with_label_dir, image_filename + '.' + image_ext)
                     #print("ch:", ch, "image_path", saved_image_path)
                     if os.path.exists(saved_image_path):
                         saved_image_exist = True
@@ -256,7 +277,7 @@ def main():
                 resize_canvas_size = args.canvas_size
                 if args.resize_canvas_size > 0:
                     resize_canvas_size = args.resize_canvas_size
-                model.sample(batch, infer_dir, src_char_list=current_round_text, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size, filename_mode=args.generate_filename_mode)
+                model.sample(batch, infer_dir, src_char_list=current_round_text, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size, filename_mode=args.generate_filename_mode, binary_image=True, strength=args.anti_alias, image_ext=args.image_ext)
                 print("done sample, goto next round")
                 global_steps += 1
 

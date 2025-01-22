@@ -65,14 +65,8 @@ parser.add_argument('--src_font_y_offset', type=int, default=0)
 parser.add_argument('--resume_from_round', type=int, default=1)
 parser.add_argument('--each_loop_length', type=int, default=200)
 parser.add_argument('--conv2_layer_count', type=int, default=3)
-
-def draw_single_char(ch, font, canvas_size, y_offset = 0):
-    img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
-    draw = ImageDraw.Draw(img)
-    draw.text((0, 0 - y_offset), ch, (0, 0, 0), font=font)
-    img = img.convert('L')
-    return img
-
+parser.add_argument('--anti_alias', type=int, default=1)
+parser.add_argument('--image_ext', type=str, default='png', help='infer image format')
 
 def main():
     args = parser.parse_args()
@@ -100,7 +94,6 @@ def main():
         checkpoint_dir = args.experiment_checkpoint_dir
         print("access checkpoint object at path: %s" % (checkpoint_dir))
 
-
     t0 = time.time()
 
     model = Zi2ZiModel(
@@ -120,7 +113,6 @@ def main():
 
     t1 = time.time()
 
-    filename_mode = "unicode_int"
     src_char_list = args.src_txt
     text_filepath = args.src_txt_file
     if text_filepath:
@@ -142,10 +134,10 @@ def main():
     if src_char_list == "":
         target_folder_list = os.listdir(input_img_path)
         char_array = []
-        for item in target_folder_list:
-            if item.endswith(".png"):
-                #print("image file name", item)
-                char_string = item.replace(".png","")
+        for filename in target_folder_list:
+            if filename.endswith(".png"):
+                #print("image file name", filename)
+                char_string = os.path.splitext(filename)[0]
                 char_array.append(chr(int(char_string)))
         src_char_list = ''.join(char_array)
 
@@ -166,6 +158,9 @@ def main():
 
     if total_round > 1:
         print("Total round: %d" % (total_round))
+
+    filename_mode = "unicode_int"
+    image_ext = "png"
     
     for current_round in range(total_round):
         if total_round > 1:
@@ -190,7 +185,7 @@ def main():
 
                 src_img = None
                 if len(image_filename) > 0:
-                    input_image_path = os.path.join(input_img_path, image_filename + '.png')
+                    input_image_path = os.path.join(input_img_path, image_filename + '.' + image_ext)
                     #print("ch:", ch, "image_path", input_image_path)
                     if os.path.exists(input_image_path):
                         src_img = Image.open(input_image_path)
@@ -236,7 +231,7 @@ def main():
                 resize_canvas_size = args.canvas_size
                 if args.resize_canvas_size > 0:
                     resize_canvas_size = args.resize_canvas_size
-                model.sample(batch, infer_dir, src_char_list=current_round_text, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size, filename_mode=args.generate_filename_mode)
+                model.sample(batch, infer_dir, src_char_list=current_round_text, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size, filename_mode=args.generate_filename_mode, binary_image=True, strength=args.anti_alias, image_ext=args.image_ext)
                 print("done sample, goto next round")
                 global_steps += 1
 
