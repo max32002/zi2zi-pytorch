@@ -10,6 +10,8 @@ import torchvision.utils as vutils
 from PIL import Image
 import cv2
 import numpy as np
+from typing import List, Union
+import subprocess
 
 class Zi2ZiModel:
     def __init__(self, input_nc=3, embedding_num=40, embedding_dim=128,
@@ -249,6 +251,13 @@ class Zi2ZiModel:
                 # net.eval()
         print('load model %d' % epoch)
 
+    def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> None:
+        grid = vutils.make_grid(tensor)
+        # Add 0.5 after unnormalizing to [0, 255] to round to the nearest integer
+        ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
+        im = Image.fromarray(ndarr)
+        return im
+
     def anti_aliasing(self, image, strength=2):
         ksize = max(1, strength * 2 + 1)
         blurred = cv2.GaussianBlur(image, (ksize, ksize), 0)
@@ -278,18 +287,27 @@ class Zi2ZiModel:
                             if filename_mode == "unicode_int":
                                 image_filename = str(ord(src_char_list[cnt]))
                 saved_image_path = os.path.join(label_dir, image_filename + '.' + image_ext)
-                vutils.save_image(image_tensor, saved_image_path)
+                if image_ext == "svg":
+                    saved_image_path = os.path.join(label_dir, image_filename + '.bmp')
+                #vutils.save_image(image_tensor, saved_image_path)
+                im = self.save_image(image_tensor)
+                opencv_image = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
+
                 if crop_src_font:
-                    opencv_image = cv2.imread(saved_image_path)
                     croped_image = opencv_image[0:canvas_size, 0:canvas_size]
                     if resize_canvas_size > 0 and canvas_size != resize_canvas_size:
                         croped_image = cv2.resize(croped_image, (resize_canvas_size, resize_canvas_size), interpolation=cv2.INTER_NEAREST)
-                    blurred_image = self.anti_aliasing(croped_image, strength)
-                    if binary_image:
-                        threshold = 127
-                        ret, example_img = cv2.threshold(blurred_image, threshold, 255, cv2.THRESH_BINARY)
-                    ret, img_rgb = cv2.threshold(blurred_image, threshold, 255, cv2.THRESH_BINARY)
-                    cv2.imwrite(saved_image_path, img_rgb)
+                    opencv_image = self.anti_aliasing(croped_image, strength)
+                if binary_image:
+                    threshold = 127
+                    ret, opencv_image = cv2.threshold(opencv_image, threshold, 255, cv2.THRESH_BINARY)
+                
+                cv2.imwrite(saved_image_path, opencv_image)
+                if image_ext == "svg":
+                    saved_svg_path = os.path.join(label_dir, image_filename + '.' + image_ext)
+                    shell_cmd = 'potrace -b svg -u 60 %s -o %s' % (saved_image_path, saved_svg_path)
+                    returned_value = subprocess.call(shell_cmd, shell=True)
+                    os.remove(saved_image_path)
 
                 cnt += 1
 

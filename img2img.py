@@ -67,12 +67,12 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
 
 def convert_to_gray_binary(example_img, ksize=1, threshold=127):
     ksize = 0
-    opencvImage = cv2.cvtColor(np.array(example_img), cv2.COLOR_RGB2BGR)
+    opencv_image = cv2.cvtColor(np.array(example_img), cv2.COLOR_RGB2BGR)
     blurred = None
     if ksize > 0:
-        blurred = cv2.GaussianBlur(opencvImage, (ksize, ksize), 0)
+        blurred = cv2.GaussianBlur(opencv_image, (ksize, ksize), 0)
     else:
-        blurred = opencvImage
+        blurred = opencv_image
     ret, example_img = cv2.threshold(blurred, threshold, 255, cv2.THRESH_BINARY)
 
     # conver to gray
