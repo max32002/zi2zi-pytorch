@@ -22,7 +22,7 @@ class Discriminator(nn.Module):
         else:
             use_bias = norm_layer != nn.BatchNorm2d
 
-        print("conv2_layer_count", conv2_layer_count)
+        #print("conv2_layer_count", conv2_layer_count)
 
         # as tf implement, kernel_size = 5, use "SAME" padding, so we should use kw = 5 and padw = 2
         # kw = 4
