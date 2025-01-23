@@ -73,7 +73,6 @@ parser.add_argument('--type_file', type=str, default='type/宋黑类字符集.tx
 parser.add_argument('--crop_src_font', action='store_true')
 parser.add_argument('--resize_canvas_size', type=int, default=0)
 parser.add_argument('--src_font_y_offset', type=int, default=0)
-parser.add_argument('--resume_from_round', type=int, default=1)
 parser.add_argument('--each_loop_length', type=int, default=200)
 parser.add_argument('--overwrite_exist', type=int, default=1)
 parser.add_argument('--conv2_layer_count', type=int, default=3)
@@ -180,7 +179,6 @@ def main():
         total_length = len(src_char_list)
 
     each_loop_length = args.each_loop_length
-    resume_from_round = args.resume_from_round
 
     total_round = int(total_length/each_loop_length) + 1
 
@@ -189,7 +187,6 @@ def main():
     
     font = ImageFont.truetype(args.src_font, size=args.char_size)
     filename_mode = "unicode_int"
-    image_ext = "png"
     
     for current_round in range(total_round):
         if total_round > 1:
@@ -200,9 +197,6 @@ def main():
         dataloader = None
 
         if args.from_txt:
-            if (current_round+1) < resume_from_round:
-                continue
-            
             current_round_text_excepted = src_char_list[current_round*each_loop_length:(current_round+1)*each_loop_length]
             current_round_text_real = ""
 
@@ -218,7 +212,7 @@ def main():
                     image_filename = str(ord(ch))
 
                 if len(image_filename) > 0:
-                    saved_image_path = os.path.join(infer_with_label_dir, image_filename + '.' + image_ext)
+                    saved_image_path = os.path.join(infer_with_label_dir, image_filename + '.' + args.image_ext)
                     #print("ch:", ch, "image_path", saved_image_path)
                     if os.path.exists(saved_image_path):
                         saved_image_exist = True
@@ -241,6 +235,7 @@ def main():
                 print("Start to infer char at round: %d/%d" % (current_round+1,total_round))
 
             current_round_length = len(current_round_text_real)
+            #print("current_round_length", current_round_length)
             if final_batch_size < current_round_length:
                 final_batch_size = current_round_length
             if current_round_length > 0:

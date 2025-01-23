@@ -160,7 +160,6 @@ def main():
         print("Total round: %d" % (total_round))
 
     filename_mode = "unicode_int"
-    image_ext = "png"
     
     for current_round in range(total_round):
         if total_round > 1:
@@ -185,7 +184,7 @@ def main():
 
                 src_img = None
                 if len(image_filename) > 0:
-                    input_image_path = os.path.join(input_img_path, image_filename + '.' + image_ext)
+                    input_image_path = os.path.join(input_img_path, image_filename + '.' + args.image_ext)
                     #print("ch:", ch, "image_path", input_image_path)
                     if os.path.exists(input_image_path):
                         src_img = Image.open(input_image_path)
