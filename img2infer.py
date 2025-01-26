@@ -61,8 +61,6 @@ parser.add_argument('--src_infer', type=str, default='experiments/infer/0')
 parser.add_argument('--type_file', type=str, default='type/宋黑类字符集.txt')
 parser.add_argument('--crop_src_font', action='store_true')
 parser.add_argument('--resize_canvas_size', type=int, default=0)
-parser.add_argument('--src_font_y_offset', type=int, default=0)
-parser.add_argument('--resume_from_round', type=int, default=1)
 parser.add_argument('--each_loop_length', type=int, default=200)
 parser.add_argument('--conv2_layer_count', type=int, default=3)
 parser.add_argument('--anti_alias', type=int, default=1)
@@ -152,8 +150,6 @@ def main():
         total_length = len(src_char_list)
 
     each_loop_length = args.each_loop_length
-    resume_from_round = args.resume_from_round
-
     total_round = int(total_length/each_loop_length) + 1
 
     if total_round > 1:
@@ -169,8 +165,6 @@ def main():
         dataloader = None
 
         if args.from_txt:
-            if (current_round+1) < resume_from_round:
-                continue
             current_round_text_excepted = src_char_list[current_round*each_loop_length:(current_round+1)*each_loop_length]
             current_round_text_real = ""
 

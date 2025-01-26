@@ -255,8 +255,8 @@ class Zi2ZiModel:
         grid = vutils.make_grid(tensor)
         # Add 0.5 after unnormalizing to [0, 255] to round to the nearest integer
         ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
-        im = Image.fromarray(ndarr)
-        return im
+        #im = Image.fromarray(ndarr)
+        return ndarr
 
     def anti_aliasing(self, image, strength=2):
         ksize = max(1, strength * 2 + 1)
@@ -269,11 +269,12 @@ class Zi2ZiModel:
         with torch.no_grad():
             self.set_input(batch[0], batch[2], batch[1])
             self.forward()
+
+            label_dir = ""
             tensor_to_plot = torch.cat([self.fake_B, self.real_B], 3)
             for label, image_tensor in zip(batch[0], tensor_to_plot):
                 label_dir = os.path.join(basename, str(label.item()))
-                #chk_mkdir(label_dir)
-                # for seq.
+
                 image_filename = str(cnt)
                 if filename_mode != "seq":
                     if src_char_list:
@@ -288,10 +289,11 @@ class Zi2ZiModel:
                                 image_filename = str(ord(src_char_list[cnt]))
                 saved_image_path = os.path.join(label_dir, image_filename + '.' + image_ext)
                 if image_ext == "svg":
-                    saved_image_path = os.path.join(label_dir, image_filename + '.bmp')
+                    saved_image_path = os.path.join(label_dir, image_filename + '.pgm')
+                
                 #vutils.save_image(image_tensor, saved_image_path)
-                im = self.save_image(image_tensor)
-                opencv_image = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
+                opencv_image = self.save_image(image_tensor)
+                opencv_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
 
                 if crop_src_font:
                     croped_image = opencv_image[0:canvas_size, 0:canvas_size]
@@ -304,12 +306,13 @@ class Zi2ZiModel:
                 
                 cv2.imwrite(saved_image_path, opencv_image)
                 if image_ext == "svg":
-                    saved_svg_path = os.path.join(label_dir, image_filename + '.' + image_ext)
+                    saved_svg_path = os.path.join(label_dir, image_filename + '.svg')
                     shell_cmd = 'potrace -b svg -u 60 %s -o %s' % (saved_image_path, saved_svg_path)
                     returned_value = subprocess.call(shell_cmd, shell=True)
                     os.remove(saved_image_path)
 
                 cnt += 1
+
 
 def chk_mkdir(path):
     if not os.path.isdir(path):

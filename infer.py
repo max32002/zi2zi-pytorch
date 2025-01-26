@@ -72,9 +72,10 @@ parser.add_argument('--src_font', type=str, default='charset/gbk/方正新楷体
 parser.add_argument('--type_file', type=str, default='type/宋黑类字符集.txt')
 parser.add_argument('--crop_src_font', action='store_true')
 parser.add_argument('--resize_canvas_size', type=int, default=0)
+parser.add_argument('--src_font_x_offset', type=int, default=0)
 parser.add_argument('--src_font_y_offset', type=int, default=0)
 parser.add_argument('--each_loop_length', type=int, default=200)
-parser.add_argument('--overwrite_exist', type=int, default=1)
+parser.add_argument('--skip_exist', action='store_true')
 parser.add_argument('--conv2_layer_count', type=int, default=3)
 parser.add_argument('--anti_alias', type=int, default=1)
 parser.add_argument('--image_ext', type=str, default='png', help='infer image format')
@@ -94,10 +95,10 @@ def convert_to_gray_binary(example_img, ksize=1, threshold=127):
     return example_img
 
 
-def draw_single_char(ch, font, canvas_size, y_offset = 0):
+def draw_single_char(ch, font, canvas_size, x_offset = 0, y_offset = 0):
     img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
     draw = ImageDraw.Draw(img)
-    draw.text((0, 0 - y_offset), ch, (0, 0, 0), font=font)
+    draw.text((0 + x_offset, 0 + y_offset), ch, (0, 0, 0), font=font)
     img = img.convert('L')
 
     img = convert_to_gray_binary(img, 0, 127)
@@ -204,6 +205,7 @@ def main():
                 print("Start to draw char at round: %d/%d" % (current_round+1,total_round))
             
             img_list_array = []
+            ignore_int_array = [8,10,12,32,160,4447,8194]
             for ch in current_round_text_excepted:
                 saved_image_exist = False
 
@@ -219,14 +221,17 @@ def main():
 
                 append_image = True
 
-                if args.overwrite_exist == 0:
+                if args.skip_exist:
                     if saved_image_exist:
                         append_image = False
 
+                if ord(ch) in ignore_int_array:
+                    append_image = False
+                
                 if append_image:
                     current_round_text_real += ch
 
-                    img = draw_single_char(ch, font, args.canvas_size, args.src_font_y_offset)
+                    img = draw_single_char(ch, font, args.canvas_size, args.src_font_x_offset, args.src_font_y_offset)
                     img_list_array.append(transforms.Normalize(0.5, 0.5)(transforms.ToTensor()(
                         img
                     )).unsqueeze(dim=0))
