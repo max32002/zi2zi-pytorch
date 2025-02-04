@@ -68,8 +68,8 @@ parser.add_argument('--canvas_size', type=int, default=256)
 parser.add_argument('--char_size', type=int, default=256)
 parser.add_argument('--run_all_label', action='store_true')
 parser.add_argument('--label', type=int, default=0)
-parser.add_argument('--src_font', type=str, default='charset/gbk/方正新楷体_GBK(完整).TTF')
-parser.add_argument('--type_file', type=str, default='type/宋黑类字符集.txt')
+parser.add_argument('--src_font', type=str, default='')
+parser.add_argument('--type_file', type=str)
 parser.add_argument('--crop_src_font', action='store_true')
 parser.add_argument('--resize_canvas_size', type=int, default=0)
 parser.add_argument('--src_font_x_offset', type=int, default=0)
@@ -168,10 +168,10 @@ def main():
         else:
             print("src_txt_file not fould: %s" % (text_filepath))
 
-    global_steps = 0
-    with open(args.type_file, 'r', encoding='utf-8') as fp:
-        fonts = [s.strip() for s in fp.readlines()]
-    writer_dict = {v: k for k, v in enumerate(fonts)}
+    if args.type_file:
+        with open(args.type_file, 'r', encoding='utf-8') as fp:
+            fonts = [s.strip() for s in fp.readlines()]
+        writer_dict = {v: k for k, v in enumerate(fonts)}
 
     final_batch_size = args.batch_size
 
@@ -278,14 +278,12 @@ def main():
                 if args.resize_canvas_size > 0:
                     resize_canvas_size = args.resize_canvas_size
                 model.sample(batch, infer_dir, src_char_list=current_round_text, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size, filename_mode=args.generate_filename_mode, binary_image=True, strength=args.anti_alias, image_ext=args.image_ext)
-                print("done sample, goto next round")
-                global_steps += 1
+                #print("done sample, goto next round")
 
         del dataloader
         torch.cuda.empty_cache()
 
     t_finish = time.time()
-
     print('cold start time: %.2f, hot start time %.2f' % (t_finish - t0, t_finish - t1))
 
 

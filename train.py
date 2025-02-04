@@ -93,7 +93,8 @@ def main():
         Lcategory_penalty=args.Lcategory_penalty,
         save_dir=checkpoint_dir,
         conv2_layer_count=args.conv2_layer_count,
-        gpu_ids=args.gpu_ids
+        gpu_ids=args.gpu_ids,
+        lr=args.lr
     )
     model.setup()
     model.print_networks(True)

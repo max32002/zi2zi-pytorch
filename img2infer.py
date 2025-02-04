@@ -58,7 +58,6 @@ parser.add_argument('--char_size', type=int, default=256)
 parser.add_argument('--run_all_label', action='store_true')
 parser.add_argument('--label', type=int, default=0)
 parser.add_argument('--src_infer', type=str, default='experiments/infer/0')
-parser.add_argument('--type_file', type=str, default='type/宋黑类字符集.txt')
 parser.add_argument('--crop_src_font', action='store_true')
 parser.add_argument('--resize_canvas_size', type=int, default=0)
 parser.add_argument('--each_loop_length', type=int, default=200)
@@ -139,12 +138,7 @@ def main():
                 char_array.append(chr(int(char_string)))
         src_char_list = ''.join(char_array)
 
-    global_steps = 0
-    with open(args.type_file, 'r', encoding='utf-8') as fp:
-        fonts = [s.strip() for s in fp.readlines()]
-
     final_batch_size = args.batch_size
-
     total_length = 0
     if args.from_txt:
         total_length = len(src_char_list)
@@ -226,13 +220,11 @@ def main():
                     resize_canvas_size = args.resize_canvas_size
                 model.sample(batch, infer_dir, src_char_list=current_round_text, crop_src_font=args.crop_src_font, canvas_size=args.canvas_size, resize_canvas_size = args.resize_canvas_size, filename_mode=args.generate_filename_mode, binary_image=True, strength=args.anti_alias, image_ext=args.image_ext)
                 print("done sample, goto next round")
-                global_steps += 1
 
         del dataloader
         torch.cuda.empty_cache()
 
     t_finish = time.time()
-
     print('cold start time: %.2f, hot start time %.2f' % (t_finish - t0, t_finish - t1))
 
 

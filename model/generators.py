@@ -25,21 +25,16 @@ class UNetGenerator(nn.Module):
         super(UNetGenerator, self).__init__()
         # construct unet structure
 
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer,
-                                             innermost=True, embedding_dim=embedding_dim)  # add the innermost layer
-        for _ in range(num_downs - 5):  # add intermediate layers with ngf * 8 filters
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block,
-                                                 norm_layer=norm_layer, use_dropout=use_dropout)
+        # add the innermost layer
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim)
+        for index in range(num_downs - 5):  # add intermediate layers with ngf * 8 filtersv
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout)
         # gradually reduce the number of filters from ngf * 8 to ngf
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block,
-                                             norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block,
-                                             norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block,
-                                             norm_layer=norm_layer)
-        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block,
-                                             outermost=True,
-                                             norm_layer=norm_layer)  # add the outermost layer
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=5)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=6)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=7)
+        # add the outermost layer
+        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, norm_layer=norm_layer, layer=8)  
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
 
     def forward(self, x, style_or_label=None):
@@ -57,7 +52,7 @@ class UnetSkipConnectionBlock(nn.Module):
     """
 
     def __init__(self, outer_nc, inner_nc, input_nc=None,
-                 submodule=None, outermost=False, innermost=False, embedding_dim=128, norm_layer=nn.BatchNorm2d,
+                 submodule=None, embedding_dim=128, norm_layer=nn.BatchNorm2d, layer=0,
                  use_dropout=False):
         """Construct a Unet submodule with skip connections.
         Parameters:
@@ -71,39 +66,45 @@ class UnetSkipConnectionBlock(nn.Module):
             user_dropout (bool) -- if use dropout layers.
         """
         super(UnetSkipConnectionBlock, self).__init__()
+        # 初始化 self-attention 層
+        self.attn = SelfAttention(512)
+        self.res_block3 = ResidualBlock(512, 512) # 第 3 層的輸出通道數為 512        
+        self.res_block5 = ResidualBlock(256, 256) # 第 5 層的輸出通道數為 256
+
+        outermost=False
+        innermost=False
+        if layer==1: 
+            innermost=True
+        if layer==8: 
+            outermost=True
         self.outermost = outermost
         self.innermost = innermost
+        self.layer = layer
         if type(norm_layer) == functools.partial:
             use_bias = norm_layer.func == nn.InstanceNorm2d
         else:
             use_bias = norm_layer == nn.InstanceNorm2d
         if input_nc is None:
             input_nc = outer_nc
-        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4,
-                             stride=2, padding=1, bias=use_bias)
-        downrelu = nn.LeakyReLU(0.2, True)
+        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+        #downrelu = nn.LeakyReLU(0.2, True)
+        downrelu = nn.ReLU(True)
         downnorm = norm_layer(inner_nc)
         uprelu = nn.ReLU(True)
         upnorm = norm_layer(outer_nc)
 
         if outermost:
-            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc,
-                                        kernel_size=4, stride=2,
-                                        padding=1)
+            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1)
             down = [downconv]
             up = [uprelu, upconv, nn.Tanh()]
 
         elif innermost:
-            upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc,
-                                        kernel_size=4, stride=2,
-                                        padding=1, bias=use_bias)
+            upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
             down = [downrelu, downconv]
             up = [uprelu, upconv, upnorm]
 
         else:
-            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc,
-                                        kernel_size=4, stride=2,
-                                        padding=1, bias=use_bias)
+            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
             down = [downrelu, downconv, downnorm]
             up = [uprelu, upconv, upnorm]
 
@@ -135,4 +136,60 @@ class UnetSkipConnectionBlock(nn.Module):
                 return self.submodule(enc)
             sub, encode = self.submodule(enc, style)
             dec = self.up(sub)
+            if self.layer == 4:
+                dec = self.attn(dec) # 加入 self-attention 層
+            if self.layer == 3:
+                dec = self.res_block3(dec) # 在第 3 層之後加入殘差塊
+            if self.layer == 5:
+                dec = self.res_block5(dec) # 在第 5 層之後加入殘差塊
             return torch.cat([x, dec], 1), encode
+
+# 自注意力機制
+class SelfAttention(nn.Module):
+    def __init__(self, in_channels):
+        super(SelfAttention, self).__init__()
+        self.query_conv = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x):
+        batch_size, channels, height, width = x.size()
+        query = self.query_conv(x).view(batch_size, -1, height * width).permute(0, 2, 1)
+        key = self.key_conv(x).view(batch_size, -1, height * width)
+        value = self.value_conv(x).view(batch_size, -1, height * width)
+
+        attention = torch.bmm(query, key)
+        attention = nn.functional.softmax(attention, dim=-1)
+        attention = torch.bmm(value, attention.permute(0, 2, 1))
+        attention = attention.view(batch_size, channels, height, width)
+
+        return x + self.gamma * attention
+
+# 殘差塊
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
+                nn.BatchNorm2d(out_channels)
+            )
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out += self.shortcut(x)
+        out = self.relu(out)
+        return out

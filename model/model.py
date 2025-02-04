@@ -103,12 +103,10 @@ class Zi2ZiModel:
 
     def forward(self):
         # generate fake_B
-
         self.fake_B, self.encoded_real_A = self.netG(self.real_A, self.labels)
         self.encoded_fake_B = self.netG(self.fake_B).view(self.fake_B.shape[0], -1)
 
     def backward_D(self, no_target_source=False):
-
         real_AB = torch.cat([self.real_A, self.real_B], 1)
         fake_AB = torch.cat([self.real_A, self.fake_B], 1)
 
