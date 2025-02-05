@@ -76,7 +76,7 @@ parser.add_argument('--src_font_x_offset', type=int, default=0)
 parser.add_argument('--src_font_y_offset', type=int, default=0)
 parser.add_argument('--each_loop_length', type=int, default=200)
 parser.add_argument('--skip_exist', action='store_true')
-parser.add_argument('--conv2_layer_count', type=int, default=3)
+parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is 8, residual block+self attention is 11")
 parser.add_argument('--anti_alias', type=int, default=1)
 parser.add_argument('--image_ext', type=str, default='png', help='infer image format')
 

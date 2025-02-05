@@ -50,7 +50,7 @@ parser.add_argument('--random_seed', type=int, default=777,
 parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
 parser.add_argument('--input_nc', type=int, default=3,
                     help='number of input images channels')
-parser.add_argument('--conv2_layer_count', type=int, default=3)
+parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is 8, residual block+self attention is 11")
 
 def chkormakedir(path):
     if not os.path.isdir(path):

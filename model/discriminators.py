@@ -9,7 +9,7 @@ import math
 class Discriminator(nn.Module):
     """Defines a PatchGAN discriminator"""
 
-    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256, conv2_layer_count=3):
+    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256):
         """Construct a PatchGAN discriminator
         Parameters:
             input_nc (int)  -- the number of channels in input images
@@ -21,8 +21,6 @@ class Discriminator(nn.Module):
             use_bias = norm_layer.func != nn.BatchNorm2d
         else:
             use_bias = norm_layer != nn.BatchNorm2d
-
-        #print("conv2_layer_count", conv2_layer_count)
 
         # as tf implement, kernel_size = 5, use "SAME" padding, so we should use kw = 5 and padw = 2
         # kw = 4
@@ -36,7 +34,7 @@ class Discriminator(nn.Module):
         nf_mult = 1
         nf_mult_prev = 1
         # in tf implement, there are only 3 conv2d layers with stride=2.
-        #for n in range(1, 4):
+        # for n in range(1, 4):
         for n in range(1, 3):  # gradually increase the number of filters
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
@@ -48,26 +46,11 @@ class Discriminator(nn.Module):
 
         nf_mult_prev = nf_mult
         nf_mult = 8
-        if conv2_layer_count == 4:
-            sequence += [
-                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias),
-                norm_layer(ndf * nf_mult),
-                nn.LeakyReLU(0.2, True)
-            ]
-
-            nf_mult_prev = nf_mult
-            nf_mult = 16
-            sequence += [
-                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
-                norm_layer(ndf * nf_mult),
-                nn.LeakyReLU(0.2, True)
-            ]
-        else:
-            sequence += [
-                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
-                norm_layer(ndf * nf_mult),
-                nn.LeakyReLU(0.2, True)
-            ]
+        sequence += [
+            nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
+            norm_layer(ndf * nf_mult),
+            nn.LeakyReLU(0.2, True)
+        ]
 
         # Maybe useful? Experiment need to be done later.
         # output 1 channel prediction map
@@ -80,8 +63,6 @@ class Discriminator(nn.Module):
         image_size = math.ceil(image_size / 2)
         image_size = math.ceil(image_size / 2)
         image_size = math.ceil(image_size / 2)
-        if conv2_layer_count == 4:
-            image_size = math.ceil(image_size / 2)
         # 524288 = 512(num_of_channels) * (w/2/2/2) * (h/2/2/2) = 2^19  (w=h=256)
         # 131072 = 512(num_of_channels) * (w/2/2/2) * (h/2/2/2) = 2^17  (w=h=128)
         final_features = final_channels * image_size * image_size

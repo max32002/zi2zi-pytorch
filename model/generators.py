@@ -9,7 +9,7 @@ class UNetGenerator(nn.Module):
     """Create a Unet-based generator"""
 
     def __init__(self, input_nc=3, output_nc=3, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
-                 norm_layer=nn.BatchNorm2d, use_dropout=False):
+                 norm_layer=nn.BatchNorm2d, use_dropout=False, conv2_layer_count=8):
         """
         Construct a Unet generator
         Parameters:
@@ -19,6 +19,7 @@ class UNetGenerator(nn.Module):
                                 image of size 128x128 will become of size 1x1 # at the bottleneck
             ngf (int)       -- the number of filters in the last conv layer
             norm_layer      -- normalization layer
+            conv2_layer_count -- origin is 8, residual block+self attention is 11
         We construct the U-Net from the innermost layer to the outermost layer.
         It is a recursive process.
         """
@@ -26,15 +27,15 @@ class UNetGenerator(nn.Module):
         # construct unet structure
 
         # add the innermost layer
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim)
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim, conv2_layer_count=conv2_layer_count)
         for index in range(num_downs - 5):  # add intermediate layers with ngf * 8 filtersv
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout)
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout, conv2_layer_count=conv2_layer_count)
         # gradually reduce the number of filters from ngf * 8 to ngf
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=5)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=6)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=7)
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=5, conv2_layer_count=conv2_layer_count)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=6, conv2_layer_count=conv2_layer_count)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=7, conv2_layer_count=conv2_layer_count)
         # add the outermost layer
-        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, norm_layer=norm_layer, layer=8)  
+        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, norm_layer=norm_layer, layer=8, conv2_layer_count=conv2_layer_count)  
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
 
     def forward(self, x, style_or_label=None):
@@ -53,7 +54,7 @@ class UnetSkipConnectionBlock(nn.Module):
 
     def __init__(self, outer_nc, inner_nc, input_nc=None,
                  submodule=None, embedding_dim=128, norm_layer=nn.BatchNorm2d, layer=0,
-                 use_dropout=False):
+                 use_dropout=False, conv2_layer_count=11):
         """Construct a Unet submodule with skip connections.
         Parameters:
             outer_nc (int) -- the number of filters in the outer conv layer
@@ -66,10 +67,10 @@ class UnetSkipConnectionBlock(nn.Module):
             user_dropout (bool) -- if use dropout layers.
         """
         super(UnetSkipConnectionBlock, self).__init__()
-        # 初始化 self-attention 層
-        self.attn = SelfAttention(512)
-        self.res_block3 = ResidualBlock(512, 512) # 第 3 層的輸出通道數為 512        
-        self.res_block5 = ResidualBlock(256, 256) # 第 5 層的輸出通道數為 256
+        if conv2_layer_count==11:
+            self.attn = SelfAttention(512) # 初始化 self-attention 層
+            self.res_block3 = ResidualBlock(512, 512) # 第 3 層的輸出通道數為 512        
+            self.res_block5 = ResidualBlock(256, 256) # 第 5 層的輸出通道數為 256
 
         outermost=False
         innermost=False
@@ -80,6 +81,7 @@ class UnetSkipConnectionBlock(nn.Module):
         self.outermost = outermost
         self.innermost = innermost
         self.layer = layer
+        self.conv2_layer_count = conv2_layer_count
         if type(norm_layer) == functools.partial:
             use_bias = norm_layer.func == nn.InstanceNorm2d
         else:
@@ -136,12 +138,13 @@ class UnetSkipConnectionBlock(nn.Module):
                 return self.submodule(enc)
             sub, encode = self.submodule(enc, style)
             dec = self.up(sub)
-            if self.layer == 4:
-                dec = self.attn(dec) # 加入 self-attention 層
-            if self.layer == 3:
-                dec = self.res_block3(dec) # 在第 3 層之後加入殘差塊
-            if self.layer == 5:
-                dec = self.res_block5(dec) # 在第 5 層之後加入殘差塊
+            if self.conv2_layer_count == 11:
+                if self.layer == 4:
+                    dec = self.attn(dec) # 加入 self-attention 層
+                if self.layer == 3:
+                    dec = self.res_block3(dec) # 在第 3 層之後加入殘差塊
+                if self.layer == 5:
+                    dec = self.res_block5(dec) # 在第 5 層之後加入殘差塊
             return torch.cat([x, dec], 1), encode
 
 # 自注意力機制

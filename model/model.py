@@ -19,7 +19,7 @@ class Zi2ZiModel:
                  Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  image_size=256,
-                 conv2_layer_count=3):
+                 conv2_layer_count=11):
 
         if is_training:
             self.use_dropout = True
@@ -53,14 +53,14 @@ class Zi2ZiModel:
             embedding_num=self.embedding_num,
             embedding_dim=self.embedding_dim,
             ngf=self.ngf,
-            use_dropout=self.use_dropout
+            use_dropout=self.use_dropout,
+            conv2_layer_count=self.conv2_layer_count
         )
         self.netD = Discriminator(
             input_nc=2 * self.input_nc,
             embedding_num=self.embedding_num,
             ndf=self.ndf,
-            image_size=self.image_size,
-            conv2_layer_count=self.conv2_layer_count,
+            image_size=self.image_size
         )
 
         init_net(self.netG, gpu_ids=self.gpu_ids)

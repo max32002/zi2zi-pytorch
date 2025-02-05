@@ -61,7 +61,7 @@ parser.add_argument('--src_infer', type=str, default='experiments/infer/0')
 parser.add_argument('--crop_src_font', action='store_true')
 parser.add_argument('--resize_canvas_size', type=int, default=0)
 parser.add_argument('--each_loop_length', type=int, default=200)
-parser.add_argument('--conv2_layer_count', type=int, default=3)
+parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is 8, residual block+self attention is 11")
 parser.add_argument('--anti_alias', type=int, default=1)
 parser.add_argument('--image_ext', type=str, default='png', help='infer image format')
 
