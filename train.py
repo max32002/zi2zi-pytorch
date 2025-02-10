@@ -43,6 +43,8 @@ parser.add_argument('--sample_steps', type=int, default=10,
                     help='number of batches in between two samples are drawn from validation set')
 parser.add_argument('--checkpoint_steps', type=int, default=100,
                     help='number of batches in between two checkpoints')
+parser.add_argument('--checkpoint_steps_after', type=int, default=500,
+                    help='save the number of batches after')
 parser.add_argument('--flip_labels', action='store_true',
                     help='whether flip training data labels or not, in fine tuning')
 parser.add_argument('--random_seed', type=int, default=777,
@@ -129,8 +131,11 @@ def main():
                 print(log_format % (epoch, bid, total_batches, passed, model.d_loss.item(), model.g_loss.item(),
                                     category_loss, cheat_loss, const_loss, l1_loss))
             if global_steps % args.checkpoint_steps == 0:
-                model.save_networks(global_steps)
-                print("Checkpoint: save checkpoint step %d" % global_steps)
+                if global_steps >= args.checkpoint_steps:
+                    model.save_networks(global_steps)
+                    print("Checkpoint: save checkpoint step %d" % global_steps)
+                else:
+                    print("Checkpoint: checkpoint step %d, will save after %d" % (global_steps, args.checkpoint_steps))
             if global_steps % args.sample_steps == 0:
                 for vbid, val_batch in enumerate(val_dataloader):
                     model.sample(val_batch, os.path.join(sample_dir, str(global_steps)))

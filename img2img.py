@@ -148,7 +148,7 @@ def checkpoint2font(src_infer, dst, charset, char_size, canvas_size,
             break
         e = draw_checkpoint2font_example(c, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes)
         if not e is None:        
-            target_path = os.path.join(sample_dir, "%d_%04d.png" % (label, count))
+            target_path = os.path.join(sample_dir, "%d_%05d.png" % (label, count))
             #e.save(target_path)
             cv2.imwrite(target_path, e)
 
@@ -168,8 +168,7 @@ parser.add_argument('--dst_font', type=str, default=None, help='path of the targ
 parser.add_argument('--dst_imgs', type=str, default=None, help='path of the target imgs')
 
 parser.add_argument('--filter', default=False, action='store_true', help='filter recurring characters')
-parser.add_argument('--charset', type=str,
-                    help='charset, a one line file.')
+parser.add_argument('--charset', type=str, help='charset, a one line file.')
 parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle a charset before processings')
 parser.add_argument('--char_size', type=int, default=256, help='character size')
 parser.add_argument('--canvas_size', type=int, default=256, help='canvas size')
@@ -187,11 +186,11 @@ if __name__ == "__main__":
     if not os.path.isdir(args.sample_dir):
         os.mkdir(args.sample_dir)
     if args.mode == 'checkpoint2font':
-        charset = []
         if args.src_infer is None or args.dst_font is None:
             raise ValueError('src_infer and dst_font are required.')
-        if args.charset:
-            charset = list(open(args.charset, encoding='utf-8').readline().strip())
+        if args.charset is None:
+            raise ValueError('charset file are required.')
+        charset = list(open(args.charset, encoding='utf-8').readline().strip())
         else:
             # auto
             if len(charset) == 0:

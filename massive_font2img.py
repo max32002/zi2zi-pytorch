@@ -146,5 +146,5 @@ if __name__ == "__main__":
                 else:
                     continue
                 if img is not None:
-                    img.save(os.path.join(args.sample_dir, '%d_%04d.png' % (idx, cur)))
+                    img.save(os.path.join(args.sample_dir, '%d_%05d.png' % (idx, cur)))
                     cur += 1
