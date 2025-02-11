@@ -65,9 +65,12 @@ def empty_google_driver_trash(drive_service):
         try:
           # 清空 google drive垃圾桶
           response = drive_service.files().emptyTrash().execute()
-          print("google drive垃圾桶已清空。")
+          #print("google drive垃圾桶已清空。")
         except Exception as e:
           print(f"發生錯誤：{e}")
+    else:
+        #print("drive_service is None")
+        pass
 
 def main():
     args = parser.parse_args()
@@ -103,6 +106,7 @@ def main():
             # 2. 建立 Google Drive API 服務
             drive_service = build('drive', 'v3')            
         except Exception as e:
+            print(f"發生錯誤：{e}")
             pass
 
     start_time = time.time()
@@ -166,7 +170,7 @@ def main():
                             target_filepath = os.path.join(checkpoint_dir, str(checkpoint_index) + "_net_G.pth")
                             if os.path.isfile(target_filepath):
                                 os.remove(target_filepath)
-                            empty_google_driver_trash(drive_service)
+                        empty_google_driver_trash(drive_service)
                 else:
                     print("Checkpoint: checkpoint step %d, will save after %d" % (global_steps, args.checkpoint_steps_after))
             if global_steps % args.sample_steps == 0:
