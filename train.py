@@ -161,6 +161,7 @@ def main():
                                     category_loss, cheat_loss, const_loss, l1_loss))
             if global_steps % args.checkpoint_steps == 0:
                 if global_steps >= args.checkpoint_steps_after:
+                    print("Checkpoint: checkpoint step %d" % global_steps)
                     model.save_networks(global_steps)
                     if args.checkpoint_only_last:
                         for checkpoint_index in range(0, global_steps, args.checkpoint_steps):
