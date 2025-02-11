@@ -45,6 +45,8 @@ parser.add_argument('--checkpoint_steps', type=int, default=100,
                     help='number of batches in between two checkpoints')
 parser.add_argument('--checkpoint_steps_after', type=int, default=1,
                     help='save the number of batches after')
+parser.add_argument('--checkpoint_only_last', action='store_true',
+                    help='remove all previous versions, only keep last version')
 parser.add_argument('--flip_labels', action='store_true',
                     help='whether flip training data labels or not, in fine tuning')
 parser.add_argument('--random_seed', type=int, default=777,
@@ -57,6 +59,15 @@ parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is
 def chkormakedir(path):
     if not os.path.isdir(path):
         os.mkdir(path)
+
+def empty_google_driver_trash(drive_service):
+    if not drive_service is None:
+        try:
+          # 清空 google drive垃圾桶
+          response = drive_service.files().emptyTrash().execute()
+          print("google drive垃圾桶已清空。")
+        except Exception as e:
+          print(f"發生錯誤：{e}")
 
 def main():
     args = parser.parse_args()
@@ -79,6 +90,20 @@ def main():
         checkpoint_dir = args.experiment_checkpoint_dir
         chkormakedir(checkpoint_dir)
     print("access checkpoint object at path: %s" % (checkpoint_dir))
+
+    drive_service = None
+    if args.checkpoint_only_last:
+        try:
+            from googleapiclient.discovery import build
+            from google.colab import auth
+
+            # 1. 身份驗證
+            auth.authenticate_user()
+
+            # 2. 建立 Google Drive API 服務
+            drive_service = build('drive', 'v3')            
+        except Exception as e:
+            pass
 
     start_time = time.time()
 
@@ -133,7 +158,15 @@ def main():
             if global_steps % args.checkpoint_steps == 0:
                 if global_steps >= args.checkpoint_steps_after:
                     model.save_networks(global_steps)
-                    print("Checkpoint: save checkpoint step %d" % global_steps)
+                    if args.checkpoint_only_last:
+                        for checkpoint_index in range(0, global_steps, args.checkpoint_steps):
+                            target_filepath = os.path.join(checkpoint_dir, str(checkpoint_index) + "_net_D.pth")
+                            if os.path.isfile(target_filepath):
+                                os.remove(target_filepath)
+                            target_filepath = os.path.join(checkpoint_dir, str(checkpoint_index) + "_net_G.pth")
+                            if os.path.isfile(target_filepath):
+                                os.remove(target_filepath)
+                            empty_google_driver_trash(drive_service)
                 else:
                     print("Checkpoint: checkpoint step %d, will save after %d" % (global_steps, args.checkpoint_steps_after))
             if global_steps % args.sample_steps == 0:
