@@ -131,8 +131,8 @@ def filter_recurring_hash(charset, font, canvas_size, x_offset, y_offset):
     np.random.shuffle(_charset)
     sample = _charset[:2000]
     hash_count = collections.defaultdict(int)
-    for c in sample:
-        img = draw_single_char(c, font, canvas_size, x_offset, y_offset)
+    for ch in sample:
+        img = draw_single_char(ch, font, canvas_size, x_offset, y_offset)
         hash_count[hash(img.tobytes())] += 1
     recurring_hashes = filter(lambda d: d[1] > 2, hash_count.items())
     return [rh[0] for rh in recurring_hashes]
@@ -149,10 +149,10 @@ def font2font(src, dst, charset, char_size, canvas_size,
         print("filter hashes -> %s" % (",".join([str(h) for h in filter_hashes])))
 
     count = 0
-    for c in charset:
+    for ch in charset:
         if count == sample_count:
             break
-        e = draw_font2font_example(c, src_font, dst_font, canvas_size, x_offset, y_offset, filter_hashes)
+        e = draw_font2font_example(ch, src_font, dst_font, canvas_size, x_offset, y_offset, filter_hashes)
         if not e is None:
             target_path = os.path.join(sample_dir, "%d_%05d.png" % (label, count))
             #e.save(target_path)
@@ -166,10 +166,10 @@ def font2imgs(src, charset, char_size, canvas_size,
               x_offset, y_offset, sample_count, sample_dir, label=0):
     src_font = ImageFont.truetype(src, size=char_size)
     count = 0
-    for c in charset:
+    for ch in charset:
         if count == sample_count:
             break
-        e = draw_font2imgs_example(c, src_font, canvas_size, x_offset, y_offset)
+        e = draw_font2imgs_example(ch, src_font, canvas_size, x_offset, y_offset)
         if not e is None:        
             target_path = os.path.join(sample_dir, "%d_%05d.png" % (label, count))
             #e.save(target_path)

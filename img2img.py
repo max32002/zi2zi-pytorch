@@ -79,7 +79,7 @@ def convert_to_gray_binary(example_img, ksize=1, threshold=127):
     example_img = cv2.cvtColor(example_img, cv2.COLOR_BGR2GRAY)
     return example_img
 
-def draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes):
+def draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes, reverse):
     dst_img = draw_single_char(ch, dst_font, canvas_size, x_offset, y_offset)
     # check the filter example in the hashes or not
     if dst_img is None:
@@ -104,10 +104,16 @@ def draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset,
         else:
             print("path not exsit:", saved_image_path)
     
+    font_x_position = 0
+    image_x_position = canvas_size
+    if reverse:
+        font_x_position = canvas_size
+        image_x_position = 0
+
     example_img = Image.new("RGB", (canvas_size * 2, canvas_size), (255, 255, 255))
-    example_img.paste(dst_img, (0, 0))
+    example_img.paste(dst_img, (font_x_position, 0))
     if src_img:
-        example_img.paste(src_img, (canvas_size, 0))
+        example_img.paste(src_img, (image_x_position, 0))
     
     # convert to gray img
     #example_img = example_img.convert('L')
@@ -133,7 +139,7 @@ def filter_recurring_hash(charset, font, canvas_size, x_offset, y_offset):
 
 
 def checkpoint2font(src_infer, dst, charset, char_size, canvas_size,
-             x_offset, y_offset, sample_count, sample_dir, label=0, filter_by_hash=True):
+             x_offset, y_offset, sample_count, sample_dir, label=0, filter_by_hash=True, reverse=False):
     dst_font = ImageFont.truetype(dst, size=char_size)
 
     filter_hashes = set()
@@ -143,10 +149,10 @@ def checkpoint2font(src_infer, dst, charset, char_size, canvas_size,
 
     count = 0
 
-    for c in charset:
+    for ch in charset:
         if count == sample_count:
             break
-        e = draw_checkpoint2font_example(c, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes)
+        e = draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes, reverse)
         if not e is None:        
             target_path = os.path.join(sample_dir, "%d_%05d.png" % (label, count))
             #e.save(target_path)
@@ -177,6 +183,7 @@ parser.add_argument('--y_offset', type=int, default=0, help='y_offset')
 parser.add_argument('--sample_count', type=int, default=5000, help='number of characters to draw')
 parser.add_argument('--sample_dir', type=str, default='sample_dir', help='directory to save examples')
 parser.add_argument('--label', type=int, default=0, help='label as the prefix of examples')
+parser.add_argument('--reverse', action='store_true', help='reverse source and target in image position')
 
 args = parser.parse_args()
 
@@ -188,23 +195,26 @@ if __name__ == "__main__":
     if args.mode == 'checkpoint2font':
         if args.src_infer is None or args.dst_font is None:
             raise ValueError('src_infer and dst_font are required.')
-        if args.charset is None:
-            raise ValueError('charset file are required.')
-        charset = list(open(args.charset, encoding='utf-8').readline().strip())
+        
+        charset = []
+        if not args.charset is None:
+            charset = list(open(args.charset, encoding='utf-8').readline().strip())
         else:
-            # auto
-            if len(charset) == 0:
-                target_folder_list = os.listdir(input_img_path)
-                for item in target_folder_list:
-                    if item.endswith(".png"):
-                        #print("image file name", item)
-                        char_string = item.replace(".png","")
-                        charset.append(chr(int(char_string)))
+            # get charset list from filename.
+            target_folder_list = os.listdir(input_img_path)
+            for item in target_folder_list:
+                if item.endswith(".png"):
+                    #print("image file name", item)
+                    char_string = item.replace(".png","")
+                    charset.append(chr(int(char_string)))
 
         if args.shuffle:
             np.random.shuffle(charset)
+        reverse = False
+        if args.reverse:
+            reverse = True
         checkpoint2font(args.src_infer, args.dst_font, charset, args.char_size,
                   args.canvas_size, args.x_offset, args.y_offset,
-                  args.sample_count, args.sample_dir, args.label, args.filter)
+                  args.sample_count, args.sample_dir, args.label, args.filter, reverse)
     else:
         raise ValueError('mode should be font2font, font2imgs or imgs2imgs')
