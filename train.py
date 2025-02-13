@@ -123,8 +123,9 @@ def main():
         Lconst_penalty=args.Lconst_penalty,
         Lcategory_penalty=args.Lcategory_penalty,
         save_dir=checkpoint_dir,
-        conv2_layer_count=args.conv2_layer_count,
         gpu_ids=args.gpu_ids,
+        image_size=args.image_size,
+        conv2_layer_count=args.conv2_layer_count,
         lr=args.lr
     )
     model.setup()

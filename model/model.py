@@ -50,8 +50,6 @@ class Zi2ZiModel:
         self.netG = UNetGenerator(
             input_nc=self.input_nc,
             output_nc=self.input_nc,
-            embedding_num=self.embedding_num,
-            embedding_dim=self.embedding_dim,
             ngf=self.ngf,
             use_dropout=self.use_dropout,
             conv2_layer_count=self.conv2_layer_count

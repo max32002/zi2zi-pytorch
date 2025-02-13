@@ -141,6 +141,7 @@ def main():
         Lcategory_penalty=args.Lcategory_penalty,
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
+        image_size=args.image_size,
         conv2_layer_count=args.conv2_layer_count,
         is_training=False
     )
