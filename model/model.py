@@ -52,6 +52,8 @@ class Zi2ZiModel:
             output_nc=self.input_nc,
             ngf=self.ngf,
             use_dropout=self.use_dropout,
+            embedding_num=self.embedding_num,
+            embedding_dim=self.embedding_dim,
             conv2_layer_count=self.conv2_layer_count
         )
         self.netD = Discriminator(
