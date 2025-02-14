@@ -141,7 +141,7 @@ def main():
     global_steps = 0
     
     blur = True
-    if disable_blur:
+    if args.disable_blur:
         blur = False
 
     for epoch in range(args.epoch):
