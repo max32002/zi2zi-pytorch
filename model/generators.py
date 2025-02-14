@@ -127,7 +127,7 @@ class UnetSkipConnectionBlock(nn.Module):
             if self.embedding_dim > 0:
                 new_style = style.view(style.shape[0], self.embedding_dim, 1, 1)
                 if encode.shape[2] != new_style.shape[2]:
-                    new_style = nn.functional.interpolate(new_style, size=[new_style.size(2), new_style.size(3)], mode='bilinear', align_corners=False)
+                    new_style = nn.functional.interpolate(new_style, size=[encode.size(2), encode.size(3)], mode='bilinear', align_corners=False)
                 up_input = torch.cat([new_style, encode], 1)
             else:
                 up_input = encode
