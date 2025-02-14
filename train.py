@@ -55,6 +55,7 @@ parser.add_argument('--resume', type=int, default=None, help='resume from previo
 parser.add_argument('--input_nc', type=int, default=3,
                     help='number of input images channels')
 parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is 8, residual block+self attention is 11")
+parser.add_argument('--disable_blur', action='store_true')
 
 def chkormakedir(path):
     if not os.path.isdir(path):
@@ -138,6 +139,10 @@ def main():
     val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 
     global_steps = 0
+    
+    blur = True
+    if disable_blur:
+        blur = False
 
     for epoch in range(args.epoch):
         # generate train dataset every epoch so that different styles of saved char imgs can be trained.
@@ -147,7 +152,7 @@ def main():
             augment=True,
             bold=False,
             rotate=False,
-            blur=True,
+            blur=blur,
         )
         total_batches = math.ceil(len(train_dataset) / args.batch_size)
         dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
