@@ -74,7 +74,7 @@ parser.add_argument('--crop_src_font', action='store_true')
 parser.add_argument('--resize_canvas_size', type=int, default=0)
 parser.add_argument('--src_font_x_offset', type=int, default=0)
 parser.add_argument('--src_font_y_offset', type=int, default=0)
-parser.add_argument('--each_loop_length', type=int, default=200)
+parser.add_argument('--each_loop_length', type=int, default=32)
 parser.add_argument('--skip_exist', action='store_true')
 parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is 8, residual block+self attention is 11")
 parser.add_argument('--anti_alias', type=int, default=1)
@@ -282,7 +282,7 @@ def main():
                 #print("done sample, goto next round")
 
         del dataloader
-        torch.cuda.empty_cache()
+        #torch.cuda.empty_cache()
 
     t_finish = time.time()
     print('cold start time: %.2f, hot start time %.2f' % (t_finish - t0, t_finish - t1))
