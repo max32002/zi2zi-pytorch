@@ -79,6 +79,8 @@ parser.add_argument('--skip_exist', action='store_true')
 parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is 8, residual block+self attention is 11")
 parser.add_argument('--anti_alias', type=int, default=1)
 parser.add_argument('--image_ext', type=str, default='png', help='infer image format')
+parser.add_argument('--sequence_count', type=int, default=9, help="discriminator layer count")
+parser.add_argument('--final_channels', type=int, default=512, help="discriminator final channels")
 
 
 def convert_to_gray_binary(example_img, ksize=1, threshold=127):
@@ -143,6 +145,8 @@ def main():
         gpu_ids=args.gpu_ids,
         image_size=args.image_size,
         conv2_layer_count=args.conv2_layer_count,
+        sequence_count=args.sequence_count,
+        final_channels=args.final_channels,
         is_training=False
     )
     model.setup()

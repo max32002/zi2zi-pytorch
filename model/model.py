@@ -18,8 +18,7 @@ class Zi2ZiModel:
                  ngf=64, ndf=64,
                  Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
-                 image_size=256,
-                 conv2_layer_count=11):
+                 image_size=256, conv2_layer_count=11, weight_decay = 1e-5, sequence_count=9, final_channels=512):
 
         if is_training:
             self.use_dropout = True
@@ -41,9 +40,12 @@ class Zi2ZiModel:
         self.ngf = ngf
         self.ndf = ndf
         self.lr = lr
+        self.weight_decay = weight_decay    # L2 正則化強度
         self.is_training = is_training
         self.image_size = image_size
         self.conv2_layer_count = conv2_layer_count
+        self.sequence_count = sequence_count
+        self.final_channels = final_channels
 
     def setup(self):
 
@@ -60,14 +62,16 @@ class Zi2ZiModel:
             input_nc=2 * self.input_nc,
             embedding_num=self.embedding_num,
             ndf=self.ndf,
+            sequence_count=self.sequence_count,
+            final_channels=self.final_channels,
             image_size=self.image_size
         )
 
         init_net(self.netG, gpu_ids=self.gpu_ids)
         init_net(self.netD, gpu_ids=self.gpu_ids)
 
-        self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=self.lr, betas=(0.5, 0.999))
-        self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=self.lr, betas=(0.5, 0.999))
+        self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=self.lr, betas=(0.5, 0.999), weight_decay=self.weight_decay)
+        self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=self.lr, betas=(0.5, 0.999), weight_decay=self.weight_decay)
 
         self.category_loss = CategoryLoss(self.embedding_num)
         self.real_binary_loss = BinaryLoss(True)
@@ -148,7 +152,7 @@ class Zi2ZiModel:
             current_lr = p['lr']
             update_lr = current_lr / 2.0
             # minimum learning rate guarantee
-            update_lr = max(update_lr, 0.0002)
+            update_lr = max(update_lr, 0.0001)
             p['lr'] = update_lr
             print("Decay net_D learning rate from %.5f to %.5f." % (current_lr, update_lr))
 
@@ -156,7 +160,7 @@ class Zi2ZiModel:
             current_lr = p['lr']
             update_lr = current_lr / 2.0
             # minimum learning rate guarantee
-            update_lr = max(update_lr, 0.0002)
+            update_lr = max(update_lr, 0.0001)
             p['lr'] = update_lr
             print("Decay net_G learning rate from %.5f to %.5f." % (current_lr, update_lr))
 

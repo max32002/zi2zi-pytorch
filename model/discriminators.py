@@ -9,7 +9,7 @@ import math
 class Discriminator(nn.Module):
     """Defines a PatchGAN discriminator"""
 
-    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256):
+    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256, sequence_count=9, final_channels=512):
         """Construct a PatchGAN discriminator
         Parameters:
             input_nc (int)  -- the number of channels in input images
@@ -47,18 +47,20 @@ class Discriminator(nn.Module):
         nf_mult_prev = nf_mult
         nf_mult = 8
         sequence += [
-            nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
-            norm_layer(ndf * nf_mult),
+            nn.Conv2d(ndf * nf_mult_prev, final_channels, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
+            norm_layer(final_channels),
             nn.LeakyReLU(0.2, True)
         ]
 
         # Maybe useful? Experiment need to be done later.
         # output 1 channel prediction map
-        sequence += [nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]
+        if sequence_count > 8:
+            sequence += [nn.Conv2d(final_channels, 1, kernel_size=kw, stride=1, padding=padw)]
+            final_channels = 1
 
         self.model = nn.Sequential(*sequence)
         # final_channels = ndf * nf_mult
-        final_channels = 1
+        # final_channels = 1
         # use stride of 2 conv2 layer 3 times, cal the image_size
         image_size = math.ceil(image_size / 2)
         image_size = math.ceil(image_size / 2)

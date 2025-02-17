@@ -56,6 +56,8 @@ parser.add_argument('--input_nc', type=int, default=3,
                     help='number of input images channels')
 parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is 8, residual block+self attention is 11")
 parser.add_argument('--disable_blur', action='store_true')
+parser.add_argument('--sequence_count', type=int, default=9, help="discriminator layer count")
+parser.add_argument('--final_channels', type=int, default=512, help="discriminator final channels")
 
 def chkormakedir(path):
     if not os.path.isdir(path):
@@ -127,6 +129,8 @@ def main():
         gpu_ids=args.gpu_ids,
         image_size=args.image_size,
         conv2_layer_count=args.conv2_layer_count,
+        sequence_count=args.sequence_count,
+        final_channels=args.final_channels,
         lr=args.lr
     )
     model.setup()

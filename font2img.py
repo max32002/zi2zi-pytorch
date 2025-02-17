@@ -103,6 +103,7 @@ def draw_font2font_example(ch, src_font, dst_font, canvas_size, x_offset, y_offs
     #example_img = example_img.convert('L')
 
     example_img = convert_to_gray_binary(example_img, 1, 127)
+
     return example_img
 
 

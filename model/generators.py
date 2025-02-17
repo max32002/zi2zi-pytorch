@@ -68,9 +68,14 @@ class UnetSkipConnectionBlock(nn.Module):
             user_dropout (bool) -- if use dropout layers.
         """
         super(UnetSkipConnectionBlock, self).__init__()
-        if conv2_layer_count==11:
+        self.attn = None
+        if conv2_layer_count >= 9:
             self.attn = SelfAttention(512) # 初始化 self-attention 層
+        self.res_block3 = None
+        self.res_block5 = None
+        if conv2_layer_count >= 10:
             self.res_block3 = ResidualBlock(512, 512) # 第 3 層的輸出通道數為 512        
+        if conv2_layer_count >= 11:
             self.res_block5 = ResidualBlock(256, 256) # 第 5 層的輸出通道數為 256
 
         outermost=False
@@ -152,13 +157,15 @@ class UnetSkipConnectionBlock(nn.Module):
                 return self.submodule(enc)
             up_input, encode = self.submodule(enc, style)
             dec = self.up(up_input)
-            if self.conv2_layer_count == 11:
+            if self.conv2_layer_count >= 9:
                 if self.layer == 4:
                     dec = self.attn(dec) # 加入 self-attention 層
-                if self.layer == 3:
-                    dec = self.res_block3(dec) # 在第 3 層之後加入殘差塊
-                if self.layer == 5:
-                    dec = self.res_block5(dec) # 在第 5 層之後加入殘差塊
+                if self.conv2_layer_count >= 10:
+                    if self.layer == 3:
+                        dec = self.res_block3(dec) # 在第 3 層之後加入殘差塊
+                    if self.conv2_layer_count >= 11:
+                        if self.layer == 5:
+                            dec = self.res_block5(dec) # 在第 5 層之後加入殘差塊
             
             dec_resized = dec
             if x.shape[2] != dec.shape[2]:
