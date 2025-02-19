@@ -25,49 +25,58 @@ CN_T_CHARSET = None
 JP_CHARSET = None
 KR_CHARSET = None
 
-def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
-    img = Image.new("L", (canvas_size * 2, canvas_size * 2), 0)
-    draw = ImageDraw.Draw(img)
-    try:
-        draw.text((10, 10), ch, 255, font=font)
-    except OSError:
-        return None
-    bbox = img.getbbox()
-    if bbox is None:
-        return None
-    l, u, r, d = bbox
-    l = max(0, l - 5)
-    u = max(0, u - 5)
-    r = min(canvas_size * 2 - 1, r + 5)
-    d = min(canvas_size * 2 - 1, d + 5)
-    if l >= r or u >= d:
-        return None
-    img = np.array(img)
-    img = img[u:d, l:r]
-    img = 255 - img
-    img = Image.fromarray(img)
-    # img.show()
-    width, height = img.size
-    # Convert PIL.Image to FloatTensor, scale from 0 to 1, 0 = black, 1 = white
-    try:
-        img = transforms.ToTensor()(img)
-    except SystemError:
-        return None
-    img = img.unsqueeze(0)  # 加轴
-    pad_len = int(abs(width - height) / 2)  # 预填充区域的大小
-    # 需要填充区域，如果宽大于高则上下填充，否则左右填充
-    if width > height:
-        fill_area = (0, 0, pad_len, pad_len)
-    else:
-        fill_area = (pad_len, pad_len, 0, 0)
-    # 填充像素常值
-    fill_value = 1
-    img = nn.ConstantPad2d(fill_area, fill_value)(img)
-    # img = nn.ZeroPad2d(m)(img) #直接填0
-    img = img.squeeze(0)  # 去轴
-    img = transforms.ToPILImage()(img)
+def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0, auto_fit=True):
+    img = None
+    if auto_fit:
+        img = Image.new("L", (canvas_size * 2, canvas_size * 2), 0)
+        draw = ImageDraw.Draw(img)
+        try:
+            draw.text((x_offset, y_offset), ch, 255, font=font)
+        except OSError:
+            return None
 
-    img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
+        bbox = img.getbbox()
+        if bbox is None:
+            return None
+        l, u, r, d = bbox
+        l = max(0, l - 5)
+        u = max(0, u - 5)
+        r = min(canvas_size * 2 - 1, r + 5)
+        d = min(canvas_size * 2 - 1, d + 5)
+        if l >= r or u >= d:
+            return None
+        img = np.array(img)
+        img = img[u:d, l:r]
+        img = 255 - img
+        img = Image.fromarray(img)
+        # img.show()
+        width, height = img.size
+        # Convert PIL.Image to FloatTensor, scale from 0 to 1, 0 = black, 1 = white
+        try:
+            img = transforms.ToTensor()(img)
+        except SystemError:
+            return None
+        img = img.unsqueeze(0)  # 加轴
+        pad_len = int(abs(width - height) / 2)  # 预填充区域的大小
+        # 需要填充区域，如果宽大于高则上下填充，否则左右填充
+        if width > height:
+            fill_area = (0, 0, pad_len, pad_len)
+        else:
+            fill_area = (pad_len, pad_len, 0, 0)
+        # 填充像素常值
+        fill_value = 1
+        img = nn.ConstantPad2d(fill_area, fill_value)(img)
+        # img = nn.ZeroPad2d(m)(img) #直接填0
+        img = img.squeeze(0)  # 去轴
+        img = transforms.ToPILImage()(img)
+
+        img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
+    else:
+        img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        draw.text((0 + x_offset, 0 + y_offset), ch, (0, 0, 0), font=font)
+        img = img.convert('L')
+
     return img
 
 def convert_to_gray_binary(example_img, ksize=1, threshold=127):
@@ -84,8 +93,8 @@ def convert_to_gray_binary(example_img, ksize=1, threshold=127):
     example_img = cv2.cvtColor(example_img, cv2.COLOR_BGR2GRAY)
     return example_img
 
-def draw_font2font_example(ch, src_font, dst_font, canvas_size, x_offset, y_offset, filter_hashes):
-    dst_img = draw_single_char(ch, dst_font, canvas_size, x_offset, y_offset)
+def draw_font2font_example(ch, src_font, dst_font, canvas_size, src_x_offset, src_y_offset, dst_x_offset, dst_y_offset, filter_hashes, auto_fit=True):
+    dst_img = draw_single_char(ch, dst_font, canvas_size, dst_x_offset, dst_y_offset, auto_fit=auto_fit)
     # check the filter example in the hashes or not
     if dst_img is None:
         print("draw fail at char: %s" % (ch))
@@ -94,7 +103,7 @@ def draw_font2font_example(ch, src_font, dst_font, canvas_size, x_offset, y_offs
     dst_hash = hash(dst_img.tobytes())
     if dst_hash in filter_hashes:
         return None
-    src_img = draw_single_char(ch, src_font, canvas_size, x_offset, y_offset)
+    src_img = draw_single_char(ch, src_font, canvas_size, src_x_offset, src_y_offset, auto_fit=auto_fit)
     example_img = Image.new("RGB", (canvas_size * 2, canvas_size), (255, 255, 255))
     example_img.paste(dst_img, (0, 0))
     example_img.paste(src_img, (canvas_size, 0))
@@ -107,8 +116,8 @@ def draw_font2font_example(ch, src_font, dst_font, canvas_size, x_offset, y_offs
     return example_img
 
 
-def draw_font2imgs_example(ch, src_font, canvas_size, x_offset, y_offset):
-    src_img = draw_single_char(ch, src_font, canvas_size, x_offset, y_offset)
+def draw_font2imgs_example(ch, src_font, canvas_size, x_offset, y_offset,auto_fit=True):
+    src_img = draw_single_char(ch, src_font, canvas_size, x_offset, y_offset, auto_fit=auto_fit)
     example_img = convert_to_gray_binary(src_img, 0, 127)
     return example_img
 
@@ -140,7 +149,8 @@ def filter_recurring_hash(charset, font, canvas_size, x_offset, y_offset):
 
 
 def font2font(src, dst, charset, char_size, canvas_size,
-             x_offset, y_offset, sample_count, sample_dir, label=0, filter_by_hash=True):
+             src_x_offset, src_y_offset, dst_x_offset, dst_y_offset, 
+             sample_count, sample_dir, label=0, filter_by_hash=True, auto_fit=True):
     src_font = ImageFont.truetype(src, size=char_size)
     dst_font = ImageFont.truetype(dst, size=char_size)
 
@@ -153,7 +163,7 @@ def font2font(src, dst, charset, char_size, canvas_size,
     for ch in charset:
         if count == sample_count:
             break
-        e = draw_font2font_example(ch, src_font, dst_font, canvas_size, x_offset, y_offset, filter_hashes)
+        e = draw_font2font_example(ch, src_font, dst_font, canvas_size, src_x_offset, src_y_offset, dst_x_offset, dst_y_offset, filter_hashes, auto_fit=auto_fit)
         if not e is None:
             target_path = os.path.join(sample_dir, "%d_%05d.png" % (label, count))
             #e.save(target_path)
@@ -163,14 +173,13 @@ def font2font(src, dst, charset, char_size, canvas_size,
                 print("processed %d chars" % count)
 
 
-def font2imgs(src, charset, char_size, canvas_size,
-              x_offset, y_offset, sample_count, sample_dir, label=0):
+def font2imgs(src, charset, char_size, canvas_size, x_offset, y_offset, sample_count, sample_dir, label=0, auto_fit=True):
     src_font = ImageFont.truetype(src, size=char_size)
     count = 0
     for ch in charset:
         if count == sample_count:
             break
-        e = draw_font2imgs_example(ch, src_font, canvas_size, x_offset, y_offset)
+        e = draw_font2imgs_example(ch, src_font, canvas_size, x_offset, y_offset, auto_fit)
         if not e is None:        
             target_path = os.path.join(sample_dir, "%d_%05d.png" % (label, count))
             #e.save(target_path)
@@ -305,15 +314,22 @@ parser.add_argument('--charset', type=str, help='one line file.')
 parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle a charset before processings')
 parser.add_argument('--char_size', type=int, default=256, help='character size')
 parser.add_argument('--canvas_size', type=int, default=256, help='canvas size')
-parser.add_argument('--x_offset', type=int, default=0, help='x offset')
-parser.add_argument('--y_offset', type=int, default=0, help='y_offset')
+parser.add_argument('--src_x_offset', type=int, default=0, help='x offset')
+parser.add_argument('--src_y_offset', type=int, default=0, help='y_offset')
+parser.add_argument('--dst_x_offset', type=int, default=0, help='x offset')
+parser.add_argument('--dst_y_offset', type=int, default=0, help='y_offset')
 parser.add_argument('--sample_count', type=int, default=5000, help='number of characters to draw')
 parser.add_argument('--sample_dir', type=str, default='sample_dir', help='directory to save examples')
 parser.add_argument('--label', type=int, default=0, help='label as the prefix of examples')
+parser.add_argument('--disable_auto_fit', action='store_true', help='disable image auto fit')
 
 args = parser.parse_args()
 
 if __name__ == "__main__":
+    auto_fit = True
+    if args.disable_auto_fit:
+        auto_fit = False
+
     if not os.path.isdir(args.sample_dir):
         os.mkdir(args.sample_dir)
     if args.mode == 'font2font':
@@ -325,8 +341,8 @@ if __name__ == "__main__":
         if args.shuffle:
             np.random.shuffle(charset)
         font2font(args.src_font, args.dst_font, charset, args.char_size,
-                  args.canvas_size, args.x_offset, args.y_offset,
-                  args.sample_count, args.sample_dir, args.label, args.filter)
+                  args.canvas_size, args.src_x_offset, args.src_y_offset, args.dst_x_offset, args.dst_y_offset,
+                  args.sample_count, args.sample_dir, args.label, args.filter, auto_fit=auto_fit)
     elif args.mode == 'font2imgs':
         if args.src_font is None:
             raise ValueError('src_font and dst_font are required.')
@@ -334,8 +350,8 @@ if __name__ == "__main__":
             raise ValueError('charset file are required.')
         charset = list(open(args.charset, encoding='utf-8').readline().strip())
         font2imgs(args.src_font, charset, args.char_size,
-                  args.canvas_size, args.x_offset, args.y_offset,
-                  args.sample_count, args.sample_dir)
+                  args.canvas_size, args.src_x_offset, args.src_y_offset,
+                  args.sample_count, args.sample_dir, auto_fit=auto_fit)
     elif args.mode == 'fonts2imgs':
         if args.src_fonts_dir is None or args.dst_imgs is None:
             raise ValueError('src_font and dst_imgs are required.')

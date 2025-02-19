@@ -260,12 +260,12 @@ class Zi2ZiModel:
         #im = Image.fromarray(ndarr)
         return ndarr
 
-    def anti_aliasing(self, image, strength=2):
+    def anti_aliasing(self, image, strength=1):
         ksize = max(1, strength * 2 + 1)
         blurred = cv2.GaussianBlur(image, (ksize, ksize), 0)
         return blurred
 
-    def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256, filename_mode="seq", binary_image=True, strength = 1, image_ext="png"):
+    def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256, filename_mode="seq", binary_image=True, strength = 0, image_ext="png"):
         #chk_mkdir(basename)
         cnt = 0
         with torch.no_grad():
@@ -300,8 +300,13 @@ class Zi2ZiModel:
                 if crop_src_font:
                     croped_image = opencv_image[0:canvas_size, 0:canvas_size]
                     if resize_canvas_size > 0 and canvas_size != resize_canvas_size:
-                        croped_image = cv2.resize(croped_image, (resize_canvas_size, resize_canvas_size), interpolation=cv2.INTER_NEAREST)
-                    opencv_image = self.anti_aliasing(croped_image, strength)
+                        croped_image = cv2.resize(croped_image, (resize_canvas_size, resize_canvas_size), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        croped_image = cv2.resize(croped_image, (canvas_size * 2, canvas_size * 2), interpolation=cv2.INTER_LINEAR)
+                        croped_image = self.anti_aliasing(croped_image, 1)
+                        croped_image = cv2.resize(croped_image, (canvas_size, canvas_size), interpolation=cv2.INTER_LINEAR)
+                    croped_image = self.anti_aliasing(croped_image, strength)
+                    opencv_image = croped_image
                 if binary_image:
                     threshold = 127
                     ret, opencv_image = cv2.threshold(opencv_image, threshold, 255, cv2.THRESH_BINARY)
