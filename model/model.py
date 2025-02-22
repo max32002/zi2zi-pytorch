@@ -18,7 +18,8 @@ class Zi2ZiModel:
                  ngf=64, ndf=64,
                  Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
-                 image_size=256, conv2_layer_count=11, weight_decay = 1e-5, sequence_count=9, final_channels=512):
+                 image_size=256, self_attention=False, self_attention_layer=4, residual_block=False, residual_block_layer=[],
+                 weight_decay = 1e-5, sequence_count=9, final_channels=512):
 
         if is_training:
             self.use_dropout = True
@@ -43,7 +44,16 @@ class Zi2ZiModel:
         self.weight_decay = weight_decay    # L2 正則化強度
         self.is_training = is_training
         self.image_size = image_size
-        self.conv2_layer_count = conv2_layer_count
+        self.self_attention=self_attention
+        self.self_attention_layer=self_attention_layer
+        self.residual_block=residual_block
+        self.residual_block_layer = residual_block_layer
+
+        print("self_attention", self_attention)
+        print("self_attention_layer", self_attention_layer)
+        print("residual_block", residual_block)
+        print("residual_block_layer", residual_block_layer)
+
         self.sequence_count = sequence_count
         self.final_channels = final_channels
 
@@ -56,7 +66,10 @@ class Zi2ZiModel:
             use_dropout=self.use_dropout,
             embedding_num=self.embedding_num,
             embedding_dim=self.embedding_dim,
-            conv2_layer_count=self.conv2_layer_count
+            self_attention=self.self_attention,
+            self_attention_layer=self.self_attention,
+            residual_block=self.residual_block,
+            residual_block_layer=self.residual_block_layer
         )
         self.netD = Discriminator(
             input_nc=2 * self.input_nc,

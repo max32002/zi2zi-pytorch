@@ -76,7 +76,10 @@ parser.add_argument('--src_font_x_offset', type=int, default=0)
 parser.add_argument('--src_font_y_offset', type=int, default=0)
 parser.add_argument('--each_loop_length', type=int, default=32)
 parser.add_argument('--skip_exist', action='store_true')
-parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is 8, residual block+self attention is 11")
+parser.add_argument('--self_attention', action='store_true')
+parser.add_argument('--self_attention_layer', type=int, default=4, help="self attention append to layer")
+parser.add_argument('--residual_block', action='store_true')
+parser.add_argument('--residual_block_layer', nargs='*', default=[3,5], help="residual block append to layer (feature not work now)")
 parser.add_argument('--anti_alias', type=int, default=0)
 parser.add_argument('--image_ext', type=str, default='png', help='infer image format')
 parser.add_argument('--sequence_count', type=int, default=9, help="discriminator layer count")
@@ -132,6 +135,13 @@ def main():
         checkpoint_dir = args.experiment_checkpoint_dir
         print("access checkpoint object at path: %s" % (checkpoint_dir))
 
+    self_attention=False
+    if args.self_attention:
+        self_attention=True
+    self_attention_layer=args.self_attention_layer
+    residual_block=False
+    if args.residual_block:
+        residual_block=True
 
     t0 = time.time()
 
@@ -144,7 +154,10 @@ def main():
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
         image_size=args.image_size,
-        conv2_layer_count=args.conv2_layer_count,
+        self_attention=self_attention,
+        self_attention_layer=self_attention_layer,
+        residual_block=residual_block,
+        residual_block_layer=args.residual_block_layer,
         sequence_count=args.sequence_count,
         final_channels=args.final_channels,
         is_training=False

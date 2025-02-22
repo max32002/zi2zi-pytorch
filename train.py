@@ -54,7 +54,10 @@ parser.add_argument('--random_seed', type=int, default=777,
 parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
 parser.add_argument('--input_nc', type=int, default=3,
                     help='number of input images channels')
-parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is 8, residual block+self attention is 11")
+parser.add_argument('--self_attention', action='store_true')
+parser.add_argument('--self_attention_layer', type=int, default=4, help="self attention append to layer")
+parser.add_argument('--residual_block', action='store_true')
+parser.add_argument('--residual_block_layer', nargs='*', default=[3,5], help="residual block append to layer (feature not work now)")
 parser.add_argument('--disable_blur', action='store_true')
 parser.add_argument('--sequence_count', type=int, default=9, help="discriminator layer count")
 parser.add_argument('--final_channels', type=int, default=512, help="discriminator final channels")
@@ -97,6 +100,14 @@ def main():
         chkormakedir(checkpoint_dir)
     print("access checkpoint object at path: %s" % (checkpoint_dir))
 
+    self_attention=False
+    if args.self_attention:
+        self_attention=True
+    self_attention_layer=args.self_attention_layer
+    residual_block=False
+    if args.residual_block:
+        residual_block=True
+
     drive_service = None
     if args.checkpoint_only_last:
         try:
@@ -128,11 +139,15 @@ def main():
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
         image_size=args.image_size,
-        conv2_layer_count=args.conv2_layer_count,
+        self_attention=self_attention,
+        self_attention_layer=self_attention_layer,
+        residual_block=residual_block,
+        residual_block_layer=args.residual_block_layer,
         sequence_count=args.sequence_count,
         final_channels=args.final_channels,
         lr=args.lr
     )
+
     model.setup()
     model.print_networks(True)
     if args.resume:

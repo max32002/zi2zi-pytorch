@@ -61,7 +61,10 @@ parser.add_argument('--src_infer', type=str, default='experiments/infer/0')
 parser.add_argument('--crop_src_font', action='store_true')
 parser.add_argument('--resize_canvas_size', type=int, default=0)
 parser.add_argument('--each_loop_length', type=int, default=200)
-parser.add_argument('--conv2_layer_count', type=int, default=11, help="origin is 8, residual block+self attention is 11")
+parser.add_argument('--self_attention', action='store_true')
+parser.add_argument('--self_attention_layer', type=int, default=4, help="self attention append to layer")
+parser.add_argument('--residual_block', action='store_true')
+parser.add_argument('--residual_block_layer', nargs='*', default=[3,5], help="residual block append to layer (feature not work now)")
 parser.add_argument('--anti_alias', type=int, default=1)
 parser.add_argument('--image_ext', type=str, default='png', help='infer image format')
 
@@ -91,6 +94,14 @@ def main():
         checkpoint_dir = args.experiment_checkpoint_dir
         print("access checkpoint object at path: %s" % (checkpoint_dir))
 
+    self_attention=False
+    if args.self_attention:
+        self_attention=True
+    self_attention_layer=args.self_attention_layer
+    residual_block=False
+    if args.residual_block:
+        residual_block=True
+
     t0 = time.time()
 
     model = Zi2ZiModel(
@@ -101,7 +112,10 @@ def main():
         Lcategory_penalty=args.Lcategory_penalty,
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
-        conv2_layer_count=args.conv2_layer_count,
+        self_attention=self_attention,
+        self_attention_layer=self_attention_layer,
+        residual_block=residual_block,
+        residual_block_layer=args.residual_block_layer,
         is_training=False
     )
     model.setup()
