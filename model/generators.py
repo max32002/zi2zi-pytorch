@@ -27,10 +27,6 @@ class UNetGenerator(nn.Module):
         """
         super(UNetGenerator, self).__init__()
         # construct unet structure
-        
-        print("UNetGenerator self_attention", self_attention)
-        print("UNetGenerator residual_block", residual_block)
-
         # add the innermost layer
         unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer)
         for index in range(num_downs - 5):  # add intermediate layers with ngf * 8 filtersv
@@ -102,9 +98,6 @@ class UnetSkipConnectionBlock(nn.Module):
             use_bias = norm_layer == nn.InstanceNorm2d
         if input_nc is None:
             input_nc = outer_nc
-        print("layer", layer)
-        print("self_attention", self_attention)
-        print("residual_block", residual_block)
         downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
         downrelu = nn.LeakyReLU(0.2, True)
         downnorm = norm_layer(inner_nc)

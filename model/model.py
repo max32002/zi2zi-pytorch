@@ -48,12 +48,6 @@ class Zi2ZiModel:
         self.self_attention_layer=self_attention_layer
         self.residual_block=residual_block
         self.residual_block_layer = residual_block_layer
-
-        print("self_attention", self_attention)
-        print("self_attention_layer", self_attention_layer)
-        print("residual_block", residual_block)
-        print("residual_block_layer", residual_block_layer)
-
         self.sequence_count = sequence_count
         self.final_channels = final_channels
 
