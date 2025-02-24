@@ -78,10 +78,10 @@ class Discriminator(nn.Module):
         """Standard forward."""
         # features = self.model(input).view(input.shape[0], -1)
         features = self.model(input)
+        if self.blur:
+            features = self.gaussian_blur(features)
+
         features = features.view(input.shape[0], -1)
         binary_logits = self.binary(features)
         catagory_logits = self.catagory(features)
-        if self.blur:
-            binary_logits = self.gaussian_blur(binary_logits)
-            catagory_logits = self.gaussian_blur(catagory_logits)
         return binary_logits, catagory_logits

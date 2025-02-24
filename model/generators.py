@@ -38,23 +38,15 @@ class UNetGenerator(nn.Module):
         # add the outermost layer
         self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, norm_layer=norm_layer, layer=8, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer, blur=blur)
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
-        
-        # 加入 Gaussian Blur
-        self.blur = blur
-        self.gaussian_blur = T.GaussianBlur(kernel_size=1, sigma=1.0)  # 設定模糊程度
 
     def forward(self, x, style_or_label=None):
         """Standard forward"""
         if style_or_label is not None and 'LongTensor' in style_or_label.type():
             style=self.embedder(style_or_label)
             output = self.model(x, style)
-            if self.blur:
-                output = self.gaussian_blur(output)
             return output
         else:
             output = self.model(x, style_or_label)
-            if self.blur:
-                output = self.gaussian_blur(output)
             return output
 
 
