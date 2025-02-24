@@ -4,12 +4,12 @@ from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
 import math
-
+import torchvision.transforms as T
 
 class Discriminator(nn.Module):
     """Defines a PatchGAN discriminator"""
 
-    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256, sequence_count=9, final_channels=512):
+    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256, sequence_count=9, final_channels=512, blur=False):
         """Construct a PatchGAN discriminator
         Parameters:
             input_nc (int)  -- the number of channels in input images
@@ -71,6 +71,9 @@ class Discriminator(nn.Module):
         self.binary = nn.Linear(final_features, 1)
         self.catagory = nn.Linear(final_features, embedding_num)
 
+        self.blur = blur
+        self.gaussian_blur = T.GaussianBlur(kernel_size=1, sigma=1.0)  # 設定模糊程度
+
     def forward(self, input):
         """Standard forward."""
         # features = self.model(input).view(input.shape[0], -1)
@@ -78,4 +81,7 @@ class Discriminator(nn.Module):
         features = features.view(input.shape[0], -1)
         binary_logits = self.binary(features)
         catagory_logits = self.catagory(features)
+        if self.blur:
+            binary_logits = self.gaussian_blur(binary_logits)
+            catagory_logits = self.gaussian_blur(catagory_logits)
         return binary_logits, catagory_logits

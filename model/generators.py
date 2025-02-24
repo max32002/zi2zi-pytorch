@@ -3,13 +3,13 @@ import torch.nn as nn
 from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
-
+import torchvision.transforms as T
 
 class UNetGenerator(nn.Module):
     """Create a Unet-based generator"""
 
     def __init__(self, input_nc=3, output_nc=3, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
-                 norm_layer=nn.BatchNorm2d, use_dropout=False, self_attention=False, self_attention_layer=4, residual_block=False, residual_block_layer=[]):
+                 norm_layer=nn.BatchNorm2d, use_dropout=False, self_attention=False, self_attention_layer=4, residual_block=False, residual_block_layer=[], blur=False):
         """
         Construct a Unet generator
         Parameters:
@@ -28,24 +28,34 @@ class UNetGenerator(nn.Module):
         super(UNetGenerator, self).__init__()
         # construct unet structure
         # add the innermost layer
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer)
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer, blur=blur)
         for index in range(num_downs - 5):  # add intermediate layers with ngf * 8 filtersv
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer)
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer, blur=blur)
         # gradually reduce the number of filters from ngf * 8 to ngf
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=5, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=6, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=7, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer)
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=5, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer, blur=blur)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=6, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer, blur=blur)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=7, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer, blur=blur)
         # add the outermost layer
-        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, norm_layer=norm_layer, layer=8, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer)
+        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, norm_layer=norm_layer, layer=8, self_attention=self_attention, self_attention_layer=self_attention_layer, residual_block=residual_block, residual_block_layer=residual_block_layer, blur=blur)
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
+        
+        # 加入 Gaussian Blur
+        self.blur = blur
+        self.gaussian_blur = T.GaussianBlur(kernel_size=1, sigma=1.0)  # 設定模糊程度
 
     def forward(self, x, style_or_label=None):
         """Standard forward"""
         if style_or_label is not None and 'LongTensor' in style_or_label.type():
             style=self.embedder(style_or_label)
-            return self.model(x, style)
+            output = self.model(x, style)
+            if self.blur:
+                output = self.gaussian_blur(output)
+            return output
         else:
-            return self.model(x, style_or_label)
+            output = self.model(x, style_or_label)
+            if self.blur:
+                output = self.gaussian_blur(output)
+            return output
 
 
 class UnetSkipConnectionBlock(nn.Module):
@@ -56,7 +66,7 @@ class UnetSkipConnectionBlock(nn.Module):
 
     def __init__(self, outer_nc, inner_nc, input_nc=None,
                  submodule=None, embedding_dim=128, norm_layer=nn.BatchNorm2d, layer=0,
-                 use_dropout=False, self_attention=False, self_attention_layer=4, residual_block=False, residual_block_layer=[]):
+                 use_dropout=False, self_attention=False, self_attention_layer=4, residual_block=False, residual_block_layer=[], blur=False):
         """Construct a Unet submodule with skip connections.
         Parameters:
             outer_nc (int) -- the number of filters in the outer conv layer
@@ -126,10 +136,15 @@ class UnetSkipConnectionBlock(nn.Module):
         self.down = nn.Sequential(*down)
         self.up = nn.Sequential(*up)
 
+        self.blur = blur
+        self.gaussian_blur = T.GaussianBlur(kernel_size=1, sigma=1.0)
+
     def forward(self, x, style=None):
         if self.innermost:
             encode = self.down(x)
             if style is None:
+                if self.blur:
+                    encode = self.gaussian_blur(encode)
                 return encode
             up_input = None
             if self.embedding_dim > 0:
@@ -145,6 +160,8 @@ class UnetSkipConnectionBlock(nn.Module):
                 dec_resized = nn.functional.interpolate(dec, size=[x.size(2), x.size(3)], mode='bilinear', align_corners=False)
             ret1=torch.cat([x, dec_resized], 1)
             ret2=encode.view(x.shape[0], -1)
+            if self.blur:
+                ret1 = self.gaussian_blur(ret1)
             return ret1, ret2
 
         elif self.outermost:
@@ -152,7 +169,10 @@ class UnetSkipConnectionBlock(nn.Module):
             if style is None:
                 return self.submodule(enc)
             up_input, encode = self.submodule(enc, style)
+            
             dec = self.up(up_input)
+            if self.blur:
+                dec = self.gaussian_blur(dec)
             return dec, encode
         else:  # add skip connections
             enc = self.down(x)

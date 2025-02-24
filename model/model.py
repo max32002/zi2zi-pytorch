@@ -19,7 +19,7 @@ class Zi2ZiModel:
                  Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  image_size=256, self_attention=False, self_attention_layer=4, residual_block=False, residual_block_layer=[],
-                 weight_decay = 1e-5, sequence_count=9, final_channels=512):
+                 weight_decay = 1e-5, sequence_count=9, final_channels=512, new_final_channels=0, beta1=0.5, g_blur=False, d_blur=False):
 
         if is_training:
             self.use_dropout = True
@@ -41,6 +41,7 @@ class Zi2ZiModel:
         self.ngf = ngf
         self.ndf = ndf
         self.lr = lr
+        self.beta1 = beta1
         self.weight_decay = weight_decay    # L2 正則化強度
         self.is_training = is_training
         self.image_size = image_size
@@ -50,6 +51,9 @@ class Zi2ZiModel:
         self.residual_block_layer = residual_block_layer
         self.sequence_count = sequence_count
         self.final_channels = final_channels
+        self.new_final_channels = new_final_channels
+        self.g_blur = g_blur
+        self.d_blur = d_blur
 
     def setup(self):
 
@@ -63,7 +67,8 @@ class Zi2ZiModel:
             self_attention=self.self_attention,
             self_attention_layer=self.self_attention,
             residual_block=self.residual_block,
-            residual_block_layer=self.residual_block_layer
+            residual_block_layer=self.residual_block_layer,
+            blur=self.g_blur
         )
         self.netD = Discriminator(
             input_nc=2 * self.input_nc,
@@ -71,14 +76,30 @@ class Zi2ZiModel:
             ndf=self.ndf,
             sequence_count=self.sequence_count,
             final_channels=self.final_channels,
-            image_size=self.image_size
+            image_size=self.image_size,
+            blur=self.d_blur
         )
+
+        self.new_netD = None
+        if self.new_final_channels > 0:
+            self.new_netD = Discriminator(
+                input_nc=2 * self.input_nc,
+                embedding_num=self.embedding_num,
+                ndf=self.ndf,
+                sequence_count=self.sequence_count,
+                final_channels=self.new_final_channels,
+                image_size=self.image_size,
+                blur=self.d_blur
+            )
+            init_net(self.new_netD, gpu_ids=self.gpu_ids)
 
         init_net(self.netG, gpu_ids=self.gpu_ids)
         init_net(self.netD, gpu_ids=self.gpu_ids)
 
-        self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=self.lr, betas=(0.5, 0.999), weight_decay=self.weight_decay)
-        self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=self.lr, betas=(0.5, 0.999), weight_decay=self.weight_decay)
+        self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
+        self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
+        if self.new_final_channels > 0:
+            self.optimizer_D = torch.optim.Adam(self.new_netD.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
 
         self.category_loss = CategoryLoss(self.embedding_num)
         self.real_binary_loss = BinaryLoss(True)
@@ -254,9 +275,22 @@ class Zi2ZiModel:
                 net = getattr(self, 'net' + name)
 
                 if self.gpu_ids and torch.cuda.is_available():
-                    net.load_state_dict(torch.load(load_path, weights_only=True))
+                    checkpoint = torch.load(load_path, weights_only=True)
+                    net.load_state_dict(checkpoint)
+                    if name=="D" and self.new_final_channels > 0:
+                        for key in ["model.8.weight", "model.8.bias", "model.8.running_mean", "model.8.running_var",
+                                    "model.9.weight", "model.9.bias", "model.9.running_mean", "model.9.running_var", 
+                                    "binary.weight", "binary.bias", "catagory.weight", "catagory.bias"]:
+                            if key in checkpoint:
+                                del checkpoint[key]
+                        self.new_netD.load_state_dict(checkpoint, strict=False)
+                        self.netD = self.new_netD
+                        print("✅ 模型遷移到 final_channels=%d，開始訓練" % (self.new_final_channels))
+                    else:
+                        net.load_state_dict(checkpoint)
                 else:
                     net.load_state_dict(torch.load(load_path, map_location=torch.device('cpu'), weights_only=True))
+
                 # net.eval()
         print('load model %d' % epoch)
 
@@ -299,7 +333,7 @@ class Zi2ZiModel:
                 saved_image_path = os.path.join(label_dir, image_filename + '.' + image_ext)
                 if image_ext == "svg":
                     saved_image_path = os.path.join(label_dir, image_filename + '.pgm')
-                
+
                 #vutils.save_image(image_tensor, saved_image_path)
                 opencv_image = self.save_image(image_tensor)
                 opencv_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
@@ -317,7 +351,7 @@ class Zi2ZiModel:
                 if binary_image:
                     threshold = 127
                     ret, opencv_image = cv2.threshold(opencv_image, threshold, 255, cv2.THRESH_BINARY)
-                
+
                 cv2.imwrite(saved_image_path, opencv_image)
                 if image_ext == "svg":
                     saved_svg_path = os.path.join(label_dir, image_filename + '.svg')

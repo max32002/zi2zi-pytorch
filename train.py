@@ -61,6 +61,9 @@ parser.add_argument('--residual_block_layer', nargs='*', default=[3,5], help="re
 parser.add_argument('--disable_blur', action='store_true')
 parser.add_argument('--sequence_count', type=int, default=9, help="discriminator layer count")
 parser.add_argument('--final_channels', type=int, default=512, help="discriminator final channels")
+parser.add_argument('--new_final_channels', type=int, default=0, help="new discriminator final channels")
+parser.add_argument('--g_blur', action='store_true')
+parser.add_argument('--d_blur', action='store_true')
 
 def chkormakedir(path):
     if not os.path.isdir(path):
@@ -123,6 +126,13 @@ def main():
             print(f"發生錯誤：{e}")
             pass
 
+    g_blur = False
+    if args.g_blur:
+        g_blur = True
+    d_blur = False
+    if args.d_blur:
+        d_blur = True
+
     start_time = time.time()
 
     # train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'),
@@ -145,6 +155,9 @@ def main():
         residual_block_layer=args.residual_block_layer,
         sequence_count=args.sequence_count,
         final_channels=args.final_channels,
+        new_final_channels=args.new_final_channels,
+        g_blur=g_blur,
+        d_blur=d_blur,
         lr=args.lr
     )
 
