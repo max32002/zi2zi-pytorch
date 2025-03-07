@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 #encoding=utf-8
+import argparse
+import collections
+import json
 import os
+import random
+import re
 import sys
 
-import argparse
 import cv2
 import numpy as np
-
-from PIL import Image, ImageFont, ImageDraw
-import json
-import collections
-import re
 from fontTools.ttLib import TTFont
-from tqdm import tqdm
-import random
-
+from PIL import Image, ImageDraw, ImageFont
 from torch import nn
 from torchvision import transforms
+from tqdm import tqdm
 
 from utils.charset_util import processGlyphNames
 
@@ -99,7 +97,7 @@ def draw_font2font_example(ch, src_font, dst_font, canvas_size, src_x_offset, sr
     if dst_img is None:
         print("draw fail at char: %s" % (ch))
         return None
-        
+
     dst_hash = hash(dst_img.tobytes())
     if dst_hash in filter_hashes:
         return None
@@ -149,7 +147,7 @@ def filter_recurring_hash(charset, font, canvas_size, x_offset, y_offset):
 
 
 def font2font(src, dst, charset, char_size, canvas_size,
-             src_x_offset, src_y_offset, dst_x_offset, dst_y_offset, 
+             src_x_offset, src_y_offset, dst_x_offset, dst_y_offset,
              sample_count, sample_dir, label=0, filter_by_hash=True, auto_fit=True):
     src_font = ImageFont.truetype(src, size=char_size)
     dst_font = ImageFont.truetype(dst, size=char_size)
@@ -160,10 +158,10 @@ def font2font(src, dst, charset, char_size, canvas_size,
         print("filter hashes -> %s" % (",".join([str(h) for h in filter_hashes])))
 
     count = 0
-    for ch in charset:
+    for char in charset:
         if count == sample_count:
             break
-        e = draw_font2font_example(ch, src_font, dst_font, canvas_size, src_x_offset, src_y_offset, dst_x_offset, dst_y_offset, filter_hashes, auto_fit=auto_fit)
+        e = draw_font2font_example(char, src_font, dst_font, canvas_size, src_x_offset, src_y_offset, dst_x_offset, dst_y_offset, filter_hashes, auto_fit=auto_fit)
         if not e is None:
             target_path = os.path.join(sample_dir, "%d_%05d.png" % (label, count))
             #e.save(target_path)
@@ -173,17 +171,34 @@ def font2font(src, dst, charset, char_size, canvas_size,
                 print("processed %d chars" % count)
 
 
-def font2imgs(src, charset, char_size, canvas_size, x_offset, y_offset, sample_count, sample_dir, label=0, auto_fit=True):
+def font2imgs(src, charset, char_size, canvas_size, x_offset, y_offset, sample_count, sample_dir, label=0, auto_fit=True,
+    filename_with_label=True, filename_rule="seq", enable_txt=False, caption_text = ""):
     src_font = ImageFont.truetype(src, size=char_size)
     count = 0
-    for ch in charset:
+    for char in charset:
         if count == sample_count:
             break
-        e = draw_font2imgs_example(ch, src_font, canvas_size, x_offset, y_offset, auto_fit)
-        if not e is None:        
-            target_path = os.path.join(sample_dir, "%d_%05d.png" % (label, count))
+        e = draw_font2imgs_example(char, src_font, canvas_size, x_offset, y_offset, auto_fit)
+        if not e is None:
+            filename_prefix = "%d_" % (label)
+            if not filename_with_label:
+                filename_prefix = ""
+            filename = "%05d" % (count)
+            if filename_rule=="unicode_int":
+                filename = f"{ord(char)}"
+            if filename_rule=="unicode_hex":
+                filename = f"{ord(char):x}"
+            target_filename = filename_prefix + filename + ".png"
+            target_path = os.path.join(sample_dir, target_filename)
             #e.save(target_path)
             cv2.imwrite(target_path, e)
+
+            if enable_txt:
+                text_filename = filename_prefix + filename + ".txt"
+                text_path = os.path.join(sample_dir, text_filename)
+                with open(text_path, "w", encoding="utf-8") as f:
+                    f.write(f"{caption_text} {char}")
+
             count += 1
             if count % 500 == 0:
                 print("processed %d chars" % count)
@@ -322,6 +337,10 @@ parser.add_argument('--sample_count', type=int, default=5000, help='number of ch
 parser.add_argument('--sample_dir', type=str, default='sample_dir', help='directory to save examples')
 parser.add_argument('--label', type=int, default=0, help='label as the prefix of examples')
 parser.add_argument('--disable_auto_fit', action='store_true', help='disable image auto fit')
+parser.add_argument('--disable_filename_label', action='store_true', help='disable image filename with label')
+parser.add_argument('--filename_rule', type=str, default="seq", choices=['seq', 'char', 'unicode_int', 'unicode_hex'])
+parser.add_argument('--enable_txt', action='store_true', help='store image caption to text file')
+parser.add_argument('--caption_text', type=str, default="")
 
 args = parser.parse_args()
 
@@ -329,6 +348,10 @@ if __name__ == "__main__":
     auto_fit = True
     if args.disable_auto_fit:
         auto_fit = False
+
+    filename_with_label = True
+    if args.disable_filename_label:
+        filename_with_label = False
 
     if not os.path.isdir(args.sample_dir):
         os.mkdir(args.sample_dir)
@@ -351,7 +374,9 @@ if __name__ == "__main__":
         charset = list(open(args.charset, encoding='utf-8').readline().strip())
         font2imgs(args.src_font, charset, args.char_size,
                   args.canvas_size, args.src_x_offset, args.src_y_offset,
-                  args.sample_count, args.sample_dir, auto_fit=auto_fit)
+                  args.sample_count, args.sample_dir, auto_fit=auto_fit,
+                  filename_with_label=filename_with_label, filename_rule=args.filename_rule,
+                  enable_txt=args.enable_txt, caption_text=args.caption_text)
     elif args.mode == 'fonts2imgs':
         if args.src_fonts_dir is None or args.dst_imgs is None:
             raise ValueError('src_font and dst_imgs are required.')

@@ -1,18 +1,18 @@
 
+import argparse
 import os
 import sys
-
-import argparse
 import time
-from PIL import Image
-import numpy as np
 
+import numpy as np
 import torch
-from torch import nn
-from torch.utils.data import TensorDataset, DataLoader, Dataset
-from torchvision import transforms
+from PIL import Image
+from sklearn.metrics import (accuracy_score, f1_score, precision_score,
+                             recall_score)
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from torch import nn
+from torch.utils.data import DataLoader, Dataset, TensorDataset
+from torchvision import transforms
 
 from model.discriminators import Discriminator
 

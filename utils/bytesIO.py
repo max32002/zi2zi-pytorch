@@ -1,7 +1,9 @@
-from io import BytesIO
-import pickle
 import os
+import pickle
+from io import BytesIO
+
 from PIL import Image
+
 
 def bytes_to_file(bytes_img):
     return BytesIO(bytes_img)
@@ -43,7 +45,7 @@ def unpickle_train_object(data_dir, sample_dir, label):
         image_file = bytes_to_file(img_bytes)
         img = Image.open(image_file)
         try:
-            img.save(os.path.join(sample_dir, "%d_%04d.png" % (label, image_index)))
+            img.save(os.path.join(sample_dir, "%d_%05d.png" % (label, image_index)))
         finally:
             image_file.close()
 

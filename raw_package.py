@@ -5,8 +5,9 @@ import json
 import os
 import pickle
 import random
-from tqdm import tqdm
 import re
+
+from tqdm import tqdm
 
 
 def pickle_examples_with_split_ratio(paths, train_path, val_path, train_val_split=0.1):

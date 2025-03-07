@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 #encoding=utf-8
 import argparse
-import sys
-import numpy as np
-import os
-from PIL import Image, ImageDraw, ImageFont
-from torchvision import transforms
-from torch import nn
-import torch
-import json
 import collections
-import re
-from tqdm import tqdm
-import random
-from fontTools.ttLib import TTFont
+import json
+import os
 import pprint
+import random
+import re
+import sys
 
-from utils.charset_util import processGlyphNames
+import numpy as np
+import torch
+from fontTools.ttLib import TTFont
+from PIL import Image, ImageDraw, ImageFont
+from torch import nn
+from torchvision import transforms
+from tqdm import tqdm
+
 from model import Zi2ZiModel
+from utils.charset_util import processGlyphNames
 
 
 def draw_single_char(ch, font, canvas_size):

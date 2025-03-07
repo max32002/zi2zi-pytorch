@@ -1,13 +1,15 @@
-from data import DatasetFromObj
-from torch.utils.data import DataLoader
-from model import Zi2ZiModel
-import os
-import sys
 import argparse
-import torch
-import random
-import time
 import math
+import os
+import random
+import sys
+import time
+
+import torch
+from torch.utils.data import DataLoader
+
+from data import DatasetFromObj
+from model import Zi2ZiModel
 
 parser = argparse.ArgumentParser(description='Train')
 parser.add_argument('--experiment_dir', required=True,

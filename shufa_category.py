@@ -1,23 +1,22 @@
 # -*- encoding: utf-8 -*-
 __author__ = 'Euphoria'
 
+import argparse
 import os
 import sys
-
-import argparse
 import time
-from PIL import Image
-import numpy as np
 
+import numpy as np
 import torch
-from torch import nn
-from torch.utils.data import TensorDataset, DataLoader, Dataset
-from torchvision import transforms
+from PIL import Image
+from sklearn.metrics import (accuracy_score, f1_score, precision_score,
+                             recall_score)
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from torch import nn
+from torch.utils.data import DataLoader, Dataset, TensorDataset
+from torchvision import transforms
 
 from model.discriminators import Discriminator
-
 
 inv_writer_dict = {
         '智永': 0, ' 隸書-趙之謙': 1, '張即之': 2, '張猛龍碑': 3, '柳公權': 4, '標楷體-手寫': 5, '歐陽詢-九成宮': 6,

@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 #encoding=utf-8
+import argparse
+import collections
+import json
 import os
+import random
+import re
 import sys
 
-import argparse
 import cv2
 import numpy as np
-
-from PIL import Image, ImageFont, ImageDraw
-import json
-import collections
-import re
 from fontTools.ttLib import TTFont
-from tqdm import tqdm
-import random
-
+from PIL import Image, ImageDraw, ImageFont
 from torch import nn
 from torchvision import transforms
+from tqdm import tqdm
 
 from utils.charset_util import processGlyphNames
+
 
 def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
     img = Image.new("L", (canvas_size * 2, canvas_size * 2), 0)

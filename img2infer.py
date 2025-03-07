@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 #encoding=utf-8
-from data import DatasetFromObj
-from torch.utils.data import DataLoader, TensorDataset
-from model import Zi2ZiModel
-import os
-from os.path import expanduser
 import argparse
-import torch
+import math
+import os
 import random
 import time
-import math
+from os.path import expanduser
+
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+import torch
 import torchvision.transforms as transforms
-from torchvision.utils import save_image, make_grid
-import time
+from PIL import Image, ImageDraw, ImageFont
+from torch.utils.data import DataLoader, TensorDataset
+from torchvision.utils import make_grid, save_image
+
+from data import DatasetFromObj
+from model import Zi2ZiModel
 from model.model import chk_mkdir
 
 parser = argparse.ArgumentParser(description='Infer')

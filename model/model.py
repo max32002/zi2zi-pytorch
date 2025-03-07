@@ -1,25 +1,306 @@
-import torch
-import torch.nn as nn
-from .generators import UNetGenerator
-from .discriminators import Discriminator
-from .losses import CategoryLoss, BinaryLoss
+import functools
+import math
 import os
-from torch.optim.lr_scheduler import StepLR
-from utils.init_net import init_net
-import torchvision.utils as vutils
-from PIL import Image
+import subprocess
+from typing import List, Union
+
 import cv2
 import numpy as np
-from typing import List, Union
-import subprocess
+import torch
+import torch.nn as nn
+import torchvision.transforms as T
+import torchvision.utils as vutils
+from PIL import Image
+from torch.nn import init
+from torch.optim import lr_scheduler
+from torch.optim.lr_scheduler import StepLR
+
+from utils.init_net import init_net
+
+
+class UNetGenerator(nn.Module):
+    def __init__(self, input_nc=3, output_nc=3, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
+                 norm_layer=nn.BatchNorm2d, use_dropout=False, self_attention=False, residual_block=False, blur=False):
+        super(UNetGenerator, self).__init__()
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim, self_attention=self_attention, residual_block=residual_block, blur=blur)
+        for index in range(num_downs - 5):  # add intermediate layers with ngf * 8 filtersv
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout, self_attention=self_attention, residual_block=residual_block, blur=blur)
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=5, self_attention=self_attention, residual_block=residual_block, blur=blur)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=6, self_attention=self_attention, residual_block=residual_block, blur=blur)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=7, self_attention=self_attention, residual_block=residual_block, blur=blur)
+        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, norm_layer=norm_layer, layer=8, self_attention=self_attention, residual_block=residual_block, blur=blur)
+        self.embedder = nn.Embedding(embedding_num, embedding_dim)
+
+    def forward(self, x, style_or_label=None):
+        if style_or_label is not None and 'LongTensor' in style_or_label.type():
+            style = self.embedder(style_or_label)
+            output = self.model(x, style)
+            return output
+        else:
+            output = self.model(x, style_or_label)
+            return output
+
+class UnetSkipConnectionBlock(nn.Module):
+    def __init__(self, outer_nc, inner_nc, input_nc=None,
+                 submodule=None, embedding_dim=128, norm_layer=nn.BatchNorm2d, layer=0,
+                 use_dropout=False, self_attention=False, residual_block=False, blur=False):
+        super(UnetSkipConnectionBlock, self).__init__()
+        self.attn4 = None
+        self.attn6 = None
+        if self_attention:
+            self.attn4 = SelfAttention(512)
+            self.attn6 = SelfAttention(128)
+        self.res_block3 = None
+        self.res_block5 = None
+        if residual_block:
+            self.res_block3 = ResidualBlock(512, 512) # 第 3 層的輸出通道數為 512
+            self.res_block5 = ResidualBlock(256, 256) # 第 5 層的輸出通道數為 256
+
+        outermost=False
+        innermost=False
+        if layer==1:
+            innermost=True
+        if layer==8:
+            outermost=True
+        self.outermost = outermost
+        self.innermost = innermost
+        self.layer = layer
+        self.self_attention = self_attention
+        self.residual_block = residual_block
+        self.embedding_dim = embedding_dim
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+        if input_nc is None:
+            input_nc = outer_nc
+        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+        downrelu = nn.LeakyReLU(0.2, True)
+        downnorm = norm_layer(inner_nc)
+        uprelu = nn.ReLU(True)
+        upnorm = norm_layer(outer_nc)
+
+        if outermost:
+            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1)
+            down = [downconv]
+            up = [uprelu, upconv, nn.Tanh()]
+
+        elif innermost:
+            upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            down = [downrelu, downconv]
+            up = [uprelu, upconv, upnorm]
+
+        else:
+            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            down = [downrelu, downconv, downnorm]
+            up = [uprelu, upconv, upnorm]
+
+            if use_dropout:
+                up = up + [nn.Dropout(0.5)]
+
+        self.submodule = submodule
+        self.down = nn.Sequential(*down)
+        self.up = nn.Sequential(*up)
+
+        self.blur = blur
+        self.gaussian_blur = T.GaussianBlur(kernel_size=1, sigma=1.0)
+
+    def forward(self, x, style=None):
+        if self.innermost:
+            encode = self.down(x)
+            if style is None:
+                if self.blur:
+                    encode = self.gaussian_blur(encode)
+                return encode
+            up_input = None
+            if self.embedding_dim > 0:
+                new_style = style.view(style.shape[0], self.embedding_dim, 1, 1)
+                if encode.shape[2] != new_style.shape[2]:
+                    new_style = nn.functional.interpolate(new_style, size=[encode.size(2), encode.size(3)], mode='bilinear', align_corners=False)
+                up_input = torch.cat([new_style, encode], 1)
+            else:
+                up_input = encode
+            dec = self.up(up_input)
+            dec_resized = dec
+            if x.shape[2] != dec.shape[2]:
+                dec_resized = nn.functional.interpolate(dec, size=[x.size(2), x.size(3)], mode='bilinear', align_corners=False)
+            ret1=torch.cat([x, dec_resized], 1)
+            ret2=encode.view(x.shape[0], -1)
+            if self.blur:
+                ret1 = self.gaussian_blur(ret1)
+            return ret1, ret2
+
+        elif self.outermost:
+            enc = self.down(x)
+            if style is None:
+                return self.submodule(enc)
+            up_input, encode = self.submodule(enc, style)
+
+            dec = self.up(up_input)
+            return dec, encode
+        else:  # add skip connections
+            enc = self.down(x)
+            if style is None:
+                return self.submodule(enc)
+            up_input, encode = self.submodule(enc, style)
+            dec = self.up(up_input)
+            if self.self_attention:
+                if self.layer == 4:
+                    dec = self.attn4(dec) # 加入 self-attention 層
+                if self.layer == 6:
+                    dec = self.attn6(dec) # 加入 self-attention 層
+
+            if self.residual_block:
+                if self.layer == 3:
+                    dec = self.res_block3(dec) # 在第 3 層之後加入殘差塊
+                if self.layer == 5:
+                    dec = self.res_block5(dec) # 在第 5 層之後加入殘差塊
+
+            dec_resized = dec
+            if x.shape[2] != dec.shape[2]:
+                dec_resized = nn.functional.interpolate(dec, size=[x.size(2), x.size(3)], mode='bilinear', align_corners=False)
+            ret1=torch.cat([x, dec_resized], 1)
+
+            return ret1, encode
+
+# 自注意力機制
+class SelfAttention(nn.Module):
+    def __init__(self, in_channels):
+        super(SelfAttention, self).__init__()
+        self.query_conv = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x):
+        batch_size, channels, height, width = x.size()
+        query = self.query_conv(x).view(batch_size, -1, height * width).permute(0, 2, 1)
+        key = self.key_conv(x).view(batch_size, -1, height * width)
+        value = self.value_conv(x).view(batch_size, -1, height * width)
+
+        attention = torch.bmm(query, key)
+        attention = nn.functional.softmax(attention, dim=-1)
+        attention = torch.bmm(value, attention.permute(0, 2, 1))
+        attention = attention.view(batch_size, channels, height, width)
+
+        return x + self.gamma * attention
+
+# 殘差塊
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
+                nn.BatchNorm2d(out_channels)
+            )
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out += self.shortcut(x)
+        out = self.relu(out)
+        return out
+
+class Discriminator(nn.Module):
+    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256, sequence_count=9, final_channels=1, blur=False):
+        super(Discriminator, self).__init__()
+        if type(norm_layer) == functools.partial:  # no need to use bias as BatchNorm2d has affine parameters
+            use_bias = norm_layer.func != nn.BatchNorm2d
+        else:
+            use_bias = norm_layer != nn.BatchNorm2d
+        kw = 5
+        padw = 2
+        sequence = [
+            nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw),
+            nn.LeakyReLU(0.2, True)
+        ]
+        nf_mult = 1
+        nf_mult_prev = 1
+        for n in range(1, 3):  # gradually increase the number of filters
+            nf_mult_prev = nf_mult
+            nf_mult = min(2 ** n, 8)
+            sequence += [
+                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias),
+                norm_layer(ndf * nf_mult),
+                nn.LeakyReLU(0.2, True)
+            ]
+        nf_mult_prev = nf_mult
+        nf_mult = 8
+        sequence += [
+            nn.Conv2d(ndf * nf_mult_prev, final_channels, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
+            norm_layer(final_channels),
+            nn.LeakyReLU(0.2, True)
+        ]
+        if sequence_count > 8:
+            sequence += [nn.Conv2d(final_channels, 1, kernel_size=kw, stride=1, padding=padw)]
+            final_channels = 1
+
+        self.model = nn.Sequential(*sequence)
+        image_size = math.ceil(image_size / 2)
+        image_size = math.ceil(image_size / 2)
+        image_size = math.ceil(image_size / 2)
+        final_features = final_channels * image_size * image_size
+        self.binary = nn.Linear(final_features, 1)
+        self.catagory = nn.Linear(final_features, embedding_num)
+        self.blur = blur
+        self.gaussian_blur = T.GaussianBlur(kernel_size=1, sigma=1.0)  # 設定模糊程度
+
+    def forward(self, input):
+        features = self.model(input)
+        if self.blur:
+            features = self.gaussian_blur(features)
+        features = features.view(input.shape[0], -1)
+        binary_logits = self.binary(features)
+        catagory_logits = self.catagory(features)
+        return binary_logits, catagory_logits
+
+class CategoryLoss(nn.Module):
+    def __init__(self, category_num):
+        super(CategoryLoss, self).__init__()
+        emb = nn.Embedding(category_num, category_num)
+        emb.weight.data = torch.eye(category_num)
+        self.emb = emb
+        self.loss = nn.BCEWithLogitsLoss()
+
+    def forward(self, category_logits, labels):
+        target = self.emb(labels)
+        return self.loss(category_logits, target)
+
+class BinaryLoss(nn.Module):
+    def __init__(self, real):
+        super(BinaryLoss, self).__init__()
+        self.bce = nn.BCEWithLogitsLoss()
+        self.real = real
+
+    def forward(self, logits):
+        if self.real:
+            labels = torch.ones(logits.shape[0], 1)
+        else:
+            labels = torch.zeros(logits.shape[0], 1)
+        if logits.is_cuda:
+            labels = labels.cuda()
+        return self.bce(logits, labels)
+
 
 class Zi2ZiModel:
     def __init__(self, input_nc=3, embedding_num=40, embedding_dim=128,
                  ngf=64, ndf=64,
                  Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
-                 image_size=256, self_attention=False, self_attention_layer=4, residual_block=False, residual_block_layer=[],
-                 weight_decay = 1e-5, sequence_count=9, final_channels=512, new_final_channels=0, beta1=0.5, g_blur=False, d_blur=False):
+                 image_size=256, self_attention=False, residual_block=False, 
+                 weight_decay = 1e-5, sequence_count=9, final_channels=1, new_final_channels=0, beta1=0.5, g_blur=False, d_blur=False):
 
         if is_training:
             self.use_dropout = True
@@ -46,9 +327,7 @@ class Zi2ZiModel:
         self.is_training = is_training
         self.image_size = image_size
         self.self_attention=self_attention
-        self.self_attention_layer=self_attention_layer
         self.residual_block=residual_block
-        self.residual_block_layer = residual_block_layer
         self.sequence_count = sequence_count
         self.final_channels = final_channels
         self.new_final_channels = new_final_channels
@@ -65,9 +344,7 @@ class Zi2ZiModel:
             embedding_num=self.embedding_num,
             embedding_dim=self.embedding_dim,
             self_attention=self.self_attention,
-            self_attention_layer=self.self_attention,
             residual_block=self.residual_block,
-            residual_block_layer=self.residual_block_layer,
             blur=self.g_blur
         )
         self.netD = Discriminator(
@@ -279,7 +556,7 @@ class Zi2ZiModel:
                     net.load_state_dict(checkpoint)
                     if name=="D" and self.new_final_channels > 0:
                         for key in ["model.8.weight", "model.8.bias", "model.8.running_mean", "model.8.running_var",
-                                    "model.9.weight", "model.9.bias", "model.9.running_mean", "model.9.running_var", 
+                                    "model.9.weight", "model.9.bias", "model.9.running_mean", "model.9.running_var",
                                     "binary.weight", "binary.bias", "catagory.weight", "catagory.bias"]:
                             if key in checkpoint:
                                 del checkpoint[key]

@@ -1,20 +1,21 @@
 
-from torch.utils.data import DataLoader, TensorDataset
-from model import Zi2ZiModel
-import os
-import sys
 import argparse
-import torch
-import random
-import time
 import math
+import os
+import random
+import sys
+import time
+
 import numpy as np
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFont
+import torch
 import torchvision.transforms as transforms
-from torchvision.utils import save_image, make_grid
-import time
+from PIL import Image, ImageDraw, ImageFont
+from torch.utils.data import DataLoader, TensorDataset
+from torchvision.utils import make_grid, save_image
 from tqdm import tqdm
+
+from model import Zi2ZiModel
 
 writer_dict = {
         '智永': 0, ' 隸書-趙之謙': 1, '張即之': 2, '張猛龍碑': 3, '柳公權': 4, '標楷體-手寫': 5, '歐陽詢-九成宮': 6,

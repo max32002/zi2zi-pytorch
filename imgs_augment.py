@@ -1,15 +1,14 @@
-import os
-import sys
-
-import random
-import warnings
 import math
+import os
+import random
+import sys
+import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+import PIL
 import pylab
 import scipy.ndimage as ndi
-from concurrent.futures import ThreadPoolExecutor
-import PIL
 from PIL import Image, ImageDraw
 from tqdm import tqdm
 
@@ -155,8 +154,8 @@ def make_multiscale_noise_uniform(shape, srange=(1.0, 100.0), nscales=4, limits=
 #
 
 def random_blobs(shape, blobdensity, size, roughness=2.0):
-    from random import randint
     from builtins import range  # python2 compatible
+    from random import randint
     h, w = shape
     numblobs = int(blobdensity * w * h)
     mask = np.zeros((h, w), 'i')

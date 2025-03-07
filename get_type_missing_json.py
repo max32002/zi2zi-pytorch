@@ -1,14 +1,15 @@
-from PIL import Image, ImageDraw, ImageFont
-import numpy as np
-from torchvision import transforms
-from torch import nn
+import json
+import os
 import random
-from natsort import natsorted
 import re
 from pprint import pprint
-import os
+
+import numpy as np
 from fontTools.ttLib import TTFont
-import json
+from natsort import natsorted
+from PIL import Image, ImageDraw, ImageFont
+from torch import nn
+from torchvision import transforms
 
 
 def get_fonts():

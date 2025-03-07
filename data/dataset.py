@@ -1,16 +1,15 @@
+import random
 from os import listdir
 from os.path import join
-import random
 
-from PIL import Image, ImageFilter
+import numpy as np
 import torch
 import torch.utils.data as data
 import torchvision.transforms as transforms
+from PIL import Image, ImageFilter
 
-import numpy as np
-
-from utils.image_processing import read_split_image
 from utils.bytesIO import PickledImageProvider, bytes_to_file
+from utils.image_processing import read_split_image
 
 
 class DatasetFromObj(data.Dataset):
@@ -62,7 +61,6 @@ class DatasetFromObj(data.Dataset):
                 nw = int(multiplier * w) + 1
                 nh = int(multiplier * h) + 1
 
-                # Used to use Image.BICUBIC, change to BILINEAR, get better image.
                 img_A = img_A.resize((nw, nh), Image.BILINEAR)
                 img_B = img_B.resize((nw, nh), Image.BILINEAR)
 
@@ -90,15 +88,6 @@ class DatasetFromObj(data.Dataset):
 
                 img_A = transforms.ToTensor()(img_A)
                 img_B = transforms.ToTensor()(img_B)
-
-                '''
-                Used to resize here. Change it before rotate and blur.
-                w_offset = random.randint(0, max(0, nh - h - 1))
-                h_offset = random.randint(0, max(0, nh - h - 1))
-
-                img_A = img_A[:, h_offset: h_offset + h, w_offset: w_offset + h]
-                img_B = img_B[:, h_offset: h_offset + h, w_offset: w_offset + h]
-                '''
 
                 img_A = self.transform(img_A)
                 img_B = self.transform(img_B)

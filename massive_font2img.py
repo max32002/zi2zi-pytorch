@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
 import argparse
-import sys
-import numpy as np
-import os
-from PIL import Image
-from PIL import ImageDraw
-from PIL import ImageFont
-import json
 import collections
-import re
-from tqdm import tqdm
+import json
+import os
 import random
+import re
+import sys
+
+import numpy as np
 from fontTools.ttLib import TTFont
-from torchvision import transforms
+from PIL import Image, ImageDraw, ImageFont
 from torch import nn
+from torchvision import transforms
+from tqdm import tqdm
 
 from utils.charset_util import processGlyphNames
 

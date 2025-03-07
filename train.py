@@ -1,69 +1,18 @@
 #!/usr/bin/env python3
 #encoding=utf-8
-from data import DatasetFromObj
-from torch.utils.data import DataLoader
-from model import Zi2ZiModel
-import os
-import sys
 import argparse
-import torch
-import random
-import time
 import math
+import os
+import random
+import sys
+import time
 
-parser = argparse.ArgumentParser(description='Train')
-parser.add_argument('--experiment_dir', required=True,
-                    help='experiment directory, data, samples,checkpoints,etc')
-parser.add_argument('--experiment_data_dir', type=str, default=None,
-                    help='overwrite data dir path, if data dir is not same with checkpoint dir')
-parser.add_argument('--experiment_checkpoint_dir', type=str, default=None,
-                    help='overwrite checkpoint dir path, if data dir is not same with checkpoint dir')
-parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
-parser.add_argument('--image_size', type=int, default=256,
-                    help="size of your input and output image")
-parser.add_argument('--L1_penalty', type=int, default=100, help='weight for L1 loss')
-parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
-# parser.add_argument('--Ltv_penalty', dest='Ltv_penalty', type=float, default=0.0, help='weight for tv loss')
-parser.add_argument('--Lcategory_penalty', type=float, default=1.0,
-                    help='weight for category loss')
-parser.add_argument('--embedding_num', type=int, default=40,
-                    help="number for distinct embeddings")
-parser.add_argument('--embedding_dim', type=int, default=128, help="dimension for embedding")
-parser.add_argument('--epoch', type=int, default=100, help='number of epoch')
-parser.add_argument('--batch_size', type=int, default=16, help='number of examples in batch')
-parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
-parser.add_argument('--schedule', type=int, default=20, help='number of epochs to half learning rate')
-parser.add_argument('--freeze_encoder', action='store_true',
-                    help="freeze encoder weights during training")
-parser.add_argument('--fine_tune', type=str, default=None,
-                    help='specific labels id to be fine tuned')
-parser.add_argument('--inst_norm', action='store_true',
-                    help='use conditional instance normalization in your model')
-parser.add_argument('--sample_steps', type=int, default=10,
-                    help='number of batches in between two samples are drawn from validation set')
-parser.add_argument('--checkpoint_steps', type=int, default=100,
-                    help='number of batches in between two checkpoints')
-parser.add_argument('--checkpoint_steps_after', type=int, default=1,
-                    help='save the number of batches after')
-parser.add_argument('--checkpoint_only_last', action='store_true',
-                    help='remove all previous versions, only keep last version')
-parser.add_argument('--flip_labels', action='store_true',
-                    help='whether flip training data labels or not, in fine tuning')
-parser.add_argument('--random_seed', type=int, default=777,
-                    help='random seed for random and pytorch')
-parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
-parser.add_argument('--input_nc', type=int, default=3,
-                    help='number of input images channels')
-parser.add_argument('--self_attention', action='store_true')
-parser.add_argument('--self_attention_layer', type=int, default=4, help="self attention append to layer")
-parser.add_argument('--residual_block', action='store_true')
-parser.add_argument('--residual_block_layer', nargs='*', default=[3,5], help="residual block append to layer (feature not work now)")
-parser.add_argument('--disable_blur', action='store_true')
-parser.add_argument('--sequence_count', type=int, default=9, help="discriminator layer count")
-parser.add_argument('--final_channels', type=int, default=512, help="discriminator final channels")
-parser.add_argument('--new_final_channels', type=int, default=0, help="new discriminator final channels")
-parser.add_argument('--g_blur', action='store_true')
-parser.add_argument('--d_blur', action='store_true')
+import torch
+from torch.utils.data import DataLoader
+
+from data import DatasetFromObj
+from model import Zi2ZiModel
+
 
 def chkormakedir(path):
     if not os.path.isdir(path):
@@ -81,7 +30,7 @@ def empty_google_driver_trash(drive_service):
         #print("drive_service is None")
         pass
 
-def main():
+def train(args):
     args = parser.parse_args()
     random.seed(args.random_seed)
     torch.manual_seed(args.random_seed)
@@ -89,24 +38,21 @@ def main():
     data_dir = os.path.join(args.experiment_dir, "data")
     checkpoint_dir = os.path.join(args.experiment_dir, "checkpoint")
     chkormakedir(checkpoint_dir)
-    sample_dir = os.path.join(args.experiment_dir, "sample")
-    chkormakedir(sample_dir)
 
     # overwrite data dir path.
-    if args.experiment_data_dir:
-        data_dir = args.experiment_data_dir
+    if args.data_dir:
+        data_dir = args.data_dir
         print("access data object at path: %s" % (data_dir))
 
     # overwrite checkpoint dir path.
-    if args.experiment_checkpoint_dir :
-        checkpoint_dir = args.experiment_checkpoint_dir
+    if args.checkpoint_dir :
+        checkpoint_dir = args.checkpoint_dir
         chkormakedir(checkpoint_dir)
     print("access checkpoint object at path: %s" % (checkpoint_dir))
 
     self_attention=False
     if args.self_attention:
         self_attention=True
-    self_attention_layer=args.self_attention_layer
     residual_block=False
     if args.residual_block:
         residual_block=True
@@ -114,12 +60,10 @@ def main():
     drive_service = None
     if args.checkpoint_only_last:
         try:
-            from googleapiclient.discovery import build
             from google.colab import auth
-
+            from googleapiclient.discovery import build
             # 1. 身份驗證
             auth.authenticate_user()
-
             # 2. 建立 Google Drive API 服務
             drive_service = build('drive', 'v3')            
         except Exception as e:
@@ -135,11 +79,6 @@ def main():
 
     start_time = time.time()
 
-    # train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'),
-    #                                augment=True, bold=True, rotate=True, blur=True)
-    # val_dataset = DatasetFromObj(os.path.join(data_dir, 'val.obj'))
-    # dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-
     model = Zi2ZiModel(
         input_nc=args.input_nc,
         embedding_num=args.embedding_num,
@@ -150,9 +89,7 @@ def main():
         gpu_ids=args.gpu_ids,
         image_size=args.image_size,
         self_attention=self_attention,
-        self_attention_layer=self_attention_layer,
         residual_block=residual_block,
-        residual_block_layer=args.residual_block_layer,
         sequence_count=args.sequence_count,
         final_channels=args.final_channels,
         new_final_channels=args.new_final_channels,
@@ -166,28 +103,12 @@ def main():
     if args.resume:
         model.load_networks(args.resume)
 
-    # val dataset load only once, no shuffle
-    val_dataset = DatasetFromObj(os.path.join(data_dir, 'val.obj'), input_nc=args.input_nc)
-    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'),input_nc=args.input_nc)
+    total_batches = math.ceil(len(train_dataset) / args.batch_size)
+    dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     global_steps = 0
-    
-    blur = True
-    if args.disable_blur:
-        blur = False
-
     for epoch in range(args.epoch):
-        # generate train dataset every epoch so that different styles of saved char imgs can be trained.
-        train_dataset = DatasetFromObj(
-            os.path.join(data_dir, 'train.obj'),
-            input_nc=args.input_nc,
-            augment=True,
-            bold=False,
-            rotate=False,
-            blur=blur,
-        )
-        total_batches = math.ceil(len(train_dataset) / args.batch_size)
-        dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
         for bid, batch in enumerate(dataloader):
             model.set_input(batch[0], batch[2], batch[1])
             const_loss, l1_loss, category_loss, cheat_loss = model.optimize_parameters()
@@ -212,18 +133,63 @@ def main():
                         empty_google_driver_trash(drive_service)
                 else:
                     print("Checkpoint: checkpoint step %d, will save after %d" % (global_steps, args.checkpoint_steps_after))
-            if global_steps % args.sample_steps == 0:
-                for vbid, val_batch in enumerate(val_dataloader):
-                    model.sample(val_batch, os.path.join(sample_dir, str(global_steps)))
-                print("Sample: sample step %d" % global_steps)
             global_steps += 1
         if (epoch + 1) % args.schedule == 0:
             model.update_lr()
-    for vbid, val_batch in enumerate(val_dataloader):
-        model.sample(val_batch, os.path.join(sample_dir, str(global_steps)))
-        print("Checkpoint: save checkpoint step %d" % global_steps)
     model.save_networks(global_steps)
 
+    passed = time.time() - start_time
+    print('passed time: %4.1f' % (passed))
 
 if __name__ == '__main__':
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Train')
+    parser.add_argument('--experiment_dir', required=True,
+                        help='experiment directory, data, samples,checkpoints,etc')
+    parser.add_argument('--data_dir', type=str, default=None,
+                        help='overwrite data dir path, if data dir is not same with checkpoint dir')
+    parser.add_argument('--checkpoint_dir', type=str, default=None,
+                        help='overwrite checkpoint dir path, if data dir is not same with checkpoint dir')
+    parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
+    parser.add_argument('--image_size', type=int, default=256,
+                        help="size of your input and output image")
+    parser.add_argument('--L1_penalty', type=int, default=100, help='weight for L1 loss')
+    parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
+    parser.add_argument('--Lcategory_penalty', type=float, default=1.0, help='weight for category loss')
+    parser.add_argument('--embedding_num', type=int, default=40,
+                        help="number for distinct embeddings")
+    parser.add_argument('--embedding_dim', type=int, default=64, help="dimension for embedding")
+    parser.add_argument('--epoch', type=int, default=100, help='number of epoch')
+    parser.add_argument('--batch_size', type=int, default=16, help='number of examples in batch')
+    parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
+    parser.add_argument('--schedule', type=int, default=20, help='number of epochs to half learning rate')
+    parser.add_argument('--freeze_encoder', action='store_true',
+                        help="freeze encoder weights during training")
+    parser.add_argument('--fine_tune', type=str, default=None,
+                        help='specific labels id to be fine tuned')
+    parser.add_argument('--inst_norm', action='store_true',
+                        help='use conditional instance normalization in your model')
+    parser.add_argument('--checkpoint_steps', type=int, default=100,
+                        help='number of batches in between two checkpoints')
+    parser.add_argument('--checkpoint_steps_after', type=int, default=1,
+                        help='save the number of batches after')
+    parser.add_argument('--checkpoint_only_last', action='store_true',
+                        help='remove all previous versions, only keep last version')
+    parser.add_argument('--flip_labels', action='store_true',
+                        help='whether flip training data labels or not, in fine tuning')
+    parser.add_argument('--random_seed', type=int, default=777,
+                        help='random seed for random and pytorch')
+    parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
+    parser.add_argument('--input_nc', type=int, default=3,
+                        help='number of input images channels')
+    parser.add_argument('--self_attention', action='store_true')
+    parser.add_argument('--residual_block', action='store_true')
+    parser.add_argument('--sequence_count', type=int, default=9, help="discriminator layer count")
+    parser.add_argument('--final_channels', type=int, default=1, help="discriminator final channels")
+    parser.add_argument('--new_final_channels', type=int, default=0, help="new discriminator final channels")
+    parser.add_argument('--g_blur', action='store_true')
+    parser.add_argument('--d_blur', action='store_true')
+
+    args = parser.parse_args()
+    train(args)

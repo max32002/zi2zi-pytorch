@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 #encoding=utf-8
-import os
-import sys
-
 import argparse
 import json
+import os
 import random
-import numpy as np
-from PIL import Image, ImageFont, ImageDraw
-from fontTools.ttLib import TTFont
+import sys
 
-from torchvision import transforms
+import numpy as np
+from fontTools.ttLib import TTFont
+from PIL import Image, ImageDraw, ImageFont
 from torch import nn
+from torchvision import transforms
 
 
 def chk_mkdir(path):
