@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.transforms as T
 import torchvision.utils as vutils
 from PIL import Image
@@ -17,201 +18,151 @@ from torch.optim.lr_scheduler import StepLR
 
 from utils.init_net import init_net
 
-
-class UNetGenerator(nn.Module):
-    def __init__(self, input_nc=3, output_nc=3, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
-                 norm_layer=nn.BatchNorm2d, use_dropout=False, self_attention=False, residual_block=False, blur=False):
-        super(UNetGenerator, self).__init__()
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim, self_attention=self_attention, residual_block=residual_block, blur=blur)
-        for index in range(num_downs - 5):  # add intermediate layers with ngf * 8 filtersv
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout, self_attention=self_attention, residual_block=residual_block, blur=blur)
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=5, self_attention=self_attention, residual_block=residual_block, blur=blur)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=6, self_attention=self_attention, residual_block=residual_block, blur=blur)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer, layer=7, self_attention=self_attention, residual_block=residual_block, blur=blur)
-        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, norm_layer=norm_layer, layer=8, self_attention=self_attention, residual_block=residual_block, blur=blur)
-        self.embedder = nn.Embedding(embedding_num, embedding_dim)
-
-    def forward(self, x, style_or_label=None):
-        if style_or_label is not None and 'LongTensor' in style_or_label.type():
-            style = self.embedder(style_or_label)
-            output = self.model(x, style)
-            return output
-        else:
-            output = self.model(x, style_or_label)
-            return output
-
-class UnetSkipConnectionBlock(nn.Module):
-    def __init__(self, outer_nc, inner_nc, input_nc=None,
-                 submodule=None, embedding_dim=128, norm_layer=nn.BatchNorm2d, layer=0,
-                 use_dropout=False, self_attention=False, residual_block=False, blur=False):
-        super(UnetSkipConnectionBlock, self).__init__()
-        self.attn4 = None
-        self.attn6 = None
-        if self_attention:
-            self.attn4 = SelfAttention(512)
-            self.attn6 = SelfAttention(128)
-        self.res_block3 = None
-        self.res_block5 = None
-        if residual_block:
-            self.res_block3 = ResidualBlock(512, 512) # 第 3 層的輸出通道數為 512
-            self.res_block5 = ResidualBlock(256, 256) # 第 5 層的輸出通道數為 256
-
-        outermost=False
-        innermost=False
-        if layer==1:
-            innermost=True
-        if layer==8:
-            outermost=True
-        self.outermost = outermost
-        self.innermost = innermost
-        self.layer = layer
-        self.self_attention = self_attention
-        self.residual_block = residual_block
-        self.embedding_dim = embedding_dim
-        if type(norm_layer) == functools.partial:
-            use_bias = norm_layer.func == nn.InstanceNorm2d
-        else:
-            use_bias = norm_layer == nn.InstanceNorm2d
-        if input_nc is None:
-            input_nc = outer_nc
-        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
-        downrelu = nn.LeakyReLU(0.2, True)
-        downnorm = norm_layer(inner_nc)
-        uprelu = nn.ReLU(True)
-        upnorm = norm_layer(outer_nc)
-
-        if outermost:
-            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1)
-            down = [downconv]
-            up = [uprelu, upconv, nn.Tanh()]
-
-        elif innermost:
-            upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
-            down = [downrelu, downconv]
-            up = [uprelu, upconv, upnorm]
-
-        else:
-            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
-            down = [downrelu, downconv, downnorm]
-            up = [uprelu, upconv, upnorm]
-
-            if use_dropout:
-                up = up + [nn.Dropout(0.5)]
-
-        self.submodule = submodule
-        self.down = nn.Sequential(*down)
-        self.up = nn.Sequential(*up)
-
-        self.blur = blur
-        self.gaussian_blur = T.GaussianBlur(kernel_size=1, sigma=1.0)
-
-    def forward(self, x, style=None):
-        if self.innermost:
-            encode = self.down(x)
-            if style is None:
-                if self.blur:
-                    encode = self.gaussian_blur(encode)
-                return encode
-            up_input = None
-            if self.embedding_dim > 0:
-                new_style = style.view(style.shape[0], self.embedding_dim, 1, 1)
-                if encode.shape[2] != new_style.shape[2]:
-                    new_style = nn.functional.interpolate(new_style, size=[encode.size(2), encode.size(3)], mode='bilinear', align_corners=False)
-                up_input = torch.cat([new_style, encode], 1)
-            else:
-                up_input = encode
-            dec = self.up(up_input)
-            dec_resized = dec
-            if x.shape[2] != dec.shape[2]:
-                dec_resized = nn.functional.interpolate(dec, size=[x.size(2), x.size(3)], mode='bilinear', align_corners=False)
-            ret1=torch.cat([x, dec_resized], 1)
-            ret2=encode.view(x.shape[0], -1)
-            if self.blur:
-                ret1 = self.gaussian_blur(ret1)
-            return ret1, ret2
-
-        elif self.outermost:
-            enc = self.down(x)
-            if style is None:
-                return self.submodule(enc)
-            up_input, encode = self.submodule(enc, style)
-
-            dec = self.up(up_input)
-            return dec, encode
-        else:  # add skip connections
-            enc = self.down(x)
-            if style is None:
-                return self.submodule(enc)
-            up_input, encode = self.submodule(enc, style)
-            dec = self.up(up_input)
-            if self.self_attention:
-                if self.layer == 4:
-                    dec = self.attn4(dec) # 加入 self-attention 層
-                if self.layer == 6:
-                    dec = self.attn6(dec) # 加入 self-attention 層
-
-            if self.residual_block:
-                if self.layer == 3:
-                    dec = self.res_block3(dec) # 在第 3 層之後加入殘差塊
-                if self.layer == 5:
-                    dec = self.res_block5(dec) # 在第 5 層之後加入殘差塊
-
-            dec_resized = dec
-            if x.shape[2] != dec.shape[2]:
-                dec_resized = nn.functional.interpolate(dec, size=[x.size(2), x.size(3)], mode='bilinear', align_corners=False)
-            ret1=torch.cat([x, dec_resized], 1)
-
-            return ret1, encode
-
-# 自注意力機制
 class SelfAttention(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, channels):
         super(SelfAttention, self).__init__()
-        self.query_conv = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
-        self.key_conv = nn.Conv2d(in_channels, in_channels // 8, kernel_size=1)
-        self.value_conv = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.query = nn.Conv2d(channels, channels // 8, kernel_size=1)
+        self.key = nn.Conv2d(channels, channels // 8, kernel_size=1)
+        self.value = nn.Conv2d(channels, channels, kernel_size=1)
         self.gamma = nn.Parameter(torch.zeros(1))
 
     def forward(self, x):
-        batch_size, channels, height, width = x.size()
-        query = self.query_conv(x).view(batch_size, -1, height * width).permute(0, 2, 1)
-        key = self.key_conv(x).view(batch_size, -1, height * width)
-        value = self.value_conv(x).view(batch_size, -1, height * width)
+        B, C, H, W = x.shape
+        proj_query = self.query(x).view(B, -1, H * W).permute(0, 2, 1)  
+        proj_key = self.key(x).view(B, -1, H * W)  
+        energy = torch.bmm(proj_query, proj_key)  
+        attention = F.softmax(energy, dim=-1)  
+        proj_value = self.value(x).view(B, -1, H * W)  
+        out = torch.bmm(proj_value, attention.permute(0, 2, 1)).view(B, C, H, W)  
+        return self.gamma * out + x  
 
-        attention = torch.bmm(query, key)
-        attention = nn.functional.softmax(attention, dim=-1)
-        attention = torch.bmm(value, attention.permute(0, 2, 1))
-        attention = attention.view(batch_size, channels, height, width)
+class UnetSkipConnectionBlock(nn.Module):
+    def __init__(self, outer_nc, inner_nc, input_nc=None, submodule=None, 
+                 norm_layer=nn.BatchNorm2d, layer=0, embedding_dim=128, 
+                 use_dropout=False, self_attention=False, blur=False, outermost=False, innermost=False):
+        super(UnetSkipConnectionBlock, self).__init__()
+        
+        self.outermost = outermost
+        self.innermost = innermost
+        use_bias = norm_layer != nn.BatchNorm2d  # 若使用 BatchNorm，則 bias=False
 
-        return x + self.gamma * attention
+        if input_nc is None:
+            input_nc = outer_nc
+        
+        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+        downrelu = nn.LeakyReLU(0.2, True)
+        downnorm = norm_layer(inner_nc)
+        uprelu = nn.ReLU(inplace=False)  # 這裡必須是 False
+        upnorm = norm_layer(outer_nc)
 
-# 殘差塊
-class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
-        super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-
-        if stride != 1 or in_channels != out_channels:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
-                nn.BatchNorm2d(out_channels)
-            )
+        if outermost:
+            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            self.down = nn.Sequential(downconv)
+            self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
+        
+        elif innermost:
+            upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            self.down = nn.Sequential(downrelu, downconv)
+            self.up = nn.Sequential(uprelu, upconv, upnorm)
+        
         else:
-            self.shortcut = nn.Identity()
+            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            self.down = nn.Sequential(downrelu, downconv, downnorm)
+            self.up = nn.Sequential(uprelu, upconv, upnorm)
+            if use_dropout:
+                self.up.add_module("dropout", nn.Dropout(0.5))
 
-    def forward(self, x):
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out += self.shortcut(x)
-        out = self.relu(out)
-        return out
+        self.submodule = submodule
+
+        # 加入 SelfAttention（適用於 layer=4,6）
+        if self_attention and layer in [4, 6]:
+            self.self_attn = SelfAttention(inner_nc)
+        else:
+            self.self_attn = None
+
+    def forward(self, x, style=None):
+        if self.innermost:
+            encoded = self.down(x)
+            if style is not None:
+                encoded = torch.cat([style.view(style.shape[0], style.shape[1], 1, 1), encoded], dim=1)
+            decoded = self.up(encoded)
+            return torch.cat([x, decoded], 1), encoded.view(x.shape[0], -1)
+
+        elif self.outermost:
+            encoded = self.down(x)
+            if self.submodule:
+                sub_output, encoded_real_A = self.submodule(encoded, style)
+            else:
+                sub_output = encoded
+            decoded = self.up(sub_output)
+            return decoded, encoded_real_A
+
+        else:
+            encoded = self.down(x)
+
+            # Self-Attention（layer=4,6）
+            if self.self_attn is not None:
+                encoded = self.self_attn(encoded)
+
+            if self.submodule:
+                sub_output, encoded_real_A = self.submodule(encoded, style)
+            else:
+                sub_output = encoded
+            decoded = self.up(sub_output)
+            return torch.cat([x, decoded], 1), encoded_real_A
+
+
+class UNetGenerator(nn.Module):
+    def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
+                 norm_layer=nn.BatchNorm2d, use_dropout=False, self_attention=False, blur=False):
+        super(UNetGenerator, self).__init__()
+        
+        # 最底層（innermost），負責風格嵌入處理
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None,
+                                             norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim, 
+                                             self_attention=self_attention, blur=blur, innermost=True)
+
+        # 中間層
+        for index in range(num_downs - 5):
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, 
+                                                 norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout, 
+                                                 self_attention=self_attention, blur=blur)
+
+        # 上層（恢復影像解析度）
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, 
+                                             norm_layer=norm_layer, layer=5, self_attention=self_attention, blur=blur)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, 
+                                             norm_layer=norm_layer, layer=6, self_attention=self_attention, blur=blur)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, 
+                                             norm_layer=norm_layer, layer=7, self_attention=self_attention, blur=blur)
+
+        # 最外層（outermost）
+        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, 
+                                             norm_layer=norm_layer, layer=8, self_attention=self_attention, blur=blur, outermost=True)
+
+        self.embedder = nn.Embedding(embedding_num, embedding_dim)
+
+    def forward(self, x, style_or_label=None):
+        """ 生成 fake_B，並獲取 encoded_real_A """
+        if style_or_label is not None and 'LongTensor' in style_or_label.type():
+            style = self.embedder(style_or_label)
+        else:
+            style = style_or_label
+        
+        fake_B, encoded_real_A = self.model(x, style)
+        
+        return fake_B, encoded_real_A
+
+    def encode(self, x, style_or_label=None):
+        """ 單純回傳編碼特徵 encoded_real_A """
+        if style_or_label is not None and 'LongTensor' in style_or_label.type():
+            style = self.embedder(style_or_label)
+        else:
+            style = style_or_label
+        
+        # Encoder 僅回傳 `encoded_real_A`
+        _, encoded_real_A = self.model(x, style)
+        return encoded_real_A
 
 class Discriminator(nn.Module):
     def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256, sequence_count=9, final_channels=1, blur=False):
@@ -344,7 +295,7 @@ class Zi2ZiModel:
             embedding_num=self.embedding_num,
             embedding_dim=self.embedding_dim,
             self_attention=self.self_attention,
-            residual_block=self.residual_block,
+            #residual_block=self.residual_block,
             blur=self.g_blur
         )
         self.netD = Discriminator(
@@ -411,9 +362,8 @@ class Zi2ZiModel:
             self.labels = labels
 
     def forward(self):
-        # generate fake_B
         self.fake_B, self.encoded_real_A = self.netG(self.real_A, self.labels)
-        self.encoded_fake_B = self.netG(self.fake_B).view(self.fake_B.shape[0], -1)
+        self.encoded_fake_B = self.netG.encode(self.fake_B, self.labels)
 
     def backward_D(self, no_target_source=False):
         real_AB = torch.cat([self.real_A, self.real_B], 1)
@@ -434,7 +384,6 @@ class Zi2ZiModel:
         return category_loss
 
     def backward_G(self, no_target_source=False):
-
         fake_AB = torch.cat([self.real_A, self.fake_B], 1)
         fake_D_logits, fake_category_logits = self.netD(fake_AB)
 
@@ -522,53 +471,32 @@ class Zi2ZiModel:
         print('-----------------------------------------------')
 
     def save_networks(self, epoch):
-        """Save all the networks to the disk.
-        Parameters:
-            epoch (int) -- current epoch; used in the file name '%s_net_%s.pth' % (epoch, name)
-        """
-        for name in ['G', 'D']:
-            if isinstance(name, str):
-                save_filename = '%s_net_%s.pth' % (epoch, name)
-                save_path = os.path.join(self.save_dir, save_filename)
-                net = getattr(self, 'net' + name)
-
-                if self.gpu_ids and torch.cuda.is_available():
-                    # torch.save(net.cpu().state_dict(), save_path)
-                    torch.save(net.state_dict(), save_path)
-                    net.cuda(self.gpu_ids[0])
-                else:
-                    torch.save(net.cpu().state_dict(), save_path)
+        torch.save(self.netG.state_dict(), os.path.join(self.save_dir, f"{epoch}_net_G.pth"))
+        torch.save(self.netD.state_dict(), os.path.join(self.save_dir, f"{epoch}_net_D.pth"))
+        print(f"💾 Checkpoint saved at epoch {epoch}")
 
     def load_networks(self, epoch):
-        """Load all the networks from the disk.
-        Parameters:
-            epoch (int) -- current epoch; used in the file name '%s_net_%s.pth' % (epoch, name)
-        """
-        for name in ['G', 'D']:
-            if isinstance(name, str):
-                load_filename = '%s_net_%s.pth' % (epoch, name)
-                save_dir_path = os.path.abspath(self.save_dir)
-                load_path = os.path.join(save_dir_path, load_filename)
-                net = getattr(self, 'net' + name)
+        target_filepath_G = os.path.join(self.save_dir, f"{epoch}_net_G.pth")
+        target_filepath_D = os.path.join(self.save_dir, f"{epoch}_net_D.pth")
+        
+        device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
 
-                if self.gpu_ids and torch.cuda.is_available():
-                    checkpoint = torch.load(load_path, weights_only=True)
-                    net.load_state_dict(checkpoint)
-                    if name=="D" and self.new_final_channels > 0:
-                        for key in ["model.8.weight", "model.8.bias", "model.8.running_mean", "model.8.running_var",
-                                    "model.9.weight", "model.9.bias", "model.9.running_mean", "model.9.running_var",
-                                    "binary.weight", "binary.bias", "catagory.weight", "catagory.bias"]:
-                            if key in checkpoint:
-                                del checkpoint[key]
-                        self.new_netD.load_state_dict(checkpoint, strict=False)
-                        self.netD = self.new_netD
-                        print("✅ 模型遷移到 final_channels=%d，開始訓練" % (self.new_final_channels))
-                    else:
-                        net.load_state_dict(checkpoint)
-                else:
-                    net.load_state_dict(torch.load(load_path, map_location=torch.device('cpu'), weights_only=True))
+        if os.path.exists(target_filepath_G):
+            self.netG.load_state_dict(torch.load(target_filepath_G, map_location=device))
+        
+        if os.path.exists(target_filepath_D):
+            checkpoint = torch.load(target_filepath_D, weights_only=True)
+            self.netD.load_state_dict(torch.load(target_filepath_D, map_location=device))
+            if self.new_final_channels > 0:
+                for key in ["model.8.weight", "model.8.bias", "model.8.running_mean", "model.8.running_var",
+                            "model.9.weight", "model.9.bias", "model.9.running_mean", "model.9.running_var",
+                            "binary.weight", "binary.bias", "catagory.weight", "catagory.bias"]:
+                    if key in checkpoint:
+                        del checkpoint[key]
+                self.new_netD.load_state_dict(checkpoint, strict=False)
+                self.netD = self.new_netD
+                print("✅ 模型遷移到 final_channels=%d，開始訓練" % (self.new_final_channels))
 
-                # net.eval()
         print('load model %d' % epoch)
 
     def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> None:

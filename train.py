@@ -8,6 +8,7 @@ import sys
 import time
 
 import torch
+torch.autograd.set_detect_anomaly(True)
 from torch.utils.data import DataLoader
 
 from data import DatasetFromObj
@@ -108,6 +109,7 @@ def train(args):
     dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     global_steps = 0
+    need_flush = False
     for epoch in range(args.epoch):
         for bid, batch in enumerate(dataloader):
             model.set_input(batch[0], batch[2], batch[1])
@@ -133,10 +135,14 @@ def train(args):
                         empty_google_driver_trash(drive_service)
                 else:
                     print("Checkpoint: checkpoint step %d, will save after %d" % (global_steps, args.checkpoint_steps_after))
+                need_flush = False
+            else:
+                need_flush = True
             global_steps += 1
         if (epoch + 1) % args.schedule == 0:
             model.update_lr()
-    model.save_networks(global_steps)
+    if need_flush:
+        model.save_networks(global_steps)
 
     passed = time.time() - start_time
     print('passed time: %4.1f' % (passed))
