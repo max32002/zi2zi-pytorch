@@ -336,6 +336,24 @@ class Zi2ZiModel:
     def forward(self):
         self.fake_B, self.encoded_real_A = self.netG(self.real_A, self.labels)
         self.encoded_fake_B = self.netG.encode(self.fake_B, self.labels)
+    
+    def compute_gradient_penalty(self, real_samples, fake_samples):
+        device = real_samples.device
+        alpha = torch.rand(real_samples.size(0), 1, 1, 1, device=device)
+        interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
+        interpolates_logits, _ = self.netD(interpolates)
+        grad_outputs = torch.ones(interpolates_logits.size(), device=device)
+        gradients = torch.autograd.grad(
+            outputs=interpolates_logits, 
+            inputs=interpolates, 
+            grad_outputs=grad_outputs,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True,
+        )[0]
+        gradients = gradients.view(gradients.size(0), -1)
+        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+        return gradient_penalty
 
     def backward_D(self, no_target_source=False):
         real_AB = torch.cat([self.real_A, self.real_B], 1)
@@ -348,11 +366,13 @@ class Zi2ZiModel:
         fake_category_loss = self.category_loss(fake_category_logits, self.labels)
         category_loss = (real_category_loss + fake_category_loss) * self.Lcategory_penalty
 
-        # Relativistic Discriminator Loss
         d_loss = torch.mean(F.logsigmoid(real_D_logits - fake_D_logits) + 
                              F.logsigmoid(fake_D_logits - real_D_logits))
 
-        self.d_loss = - d_loss + category_loss / 2.0
+        gp = self.compute_gradient_penalty(real_AB, fake_AB)
+
+        gradient_penalty_weight = 10.0  # 梯度懲罰的權重
+        self.d_loss = - d_loss + category_loss / 2.0 + gradient_penalty_weight * gp
         self.d_loss.backward()
         return category_loss
 
@@ -366,14 +386,10 @@ class Zi2ZiModel:
         const_loss = self.Lconst_penalty * self.mse(self.encoded_real_A, self.encoded_fake_B)
         l1_loss = self.L1_penalty * self.l1_loss(self.fake_B, self.real_B)
         fake_category_loss = self.Lcategory_penalty * self.category_loss(fake_category_logits, self.labels)
-
-        # Relativistic Generator Loss
         g_loss_adv = -torch.mean(F.logsigmoid(fake_D_logits - real_D_logits))
-
         self.g_loss = g_loss_adv + l1_loss + fake_category_loss + const_loss
         self.g_loss.backward()
         return const_loss, l1_loss, g_loss_adv
-
 
     def update_lr(self):
         self.scheduler_G.step()

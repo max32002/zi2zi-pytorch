@@ -62,6 +62,7 @@ def train(args):
         try:
             from google.colab import auth
             from googleapiclient.discovery import build
+
             # 1. 身份驗證
             auth.authenticate_user()
             # 2. 建立 Google Drive API 服務
