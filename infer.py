@@ -223,10 +223,8 @@ if __name__ == '__main__':
     parser.add_argument('--L1_penalty', type=int, default=100, help='weight for L1 loss')
     parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
     # parser.add_argument('--Ltv_penalty', dest='Ltv_penalty', type=float, default=0.0, help='weight for tv loss')
-    parser.add_argument('--Lcategory_penalty', type=float, default=1.0,
-                        help='weight for category loss')
-    parser.add_argument('--embedding_num', type=int, default=40,
-                        help="number for distinct embeddings")
+    parser.add_argument('--Lcategory_penalty', type=float, default=1.0, help='weight for category loss')
+    parser.add_argument('--embedding_num', type=int, default=40, help="number for distinct embeddings")
     parser.add_argument('--embedding_dim', type=int, default=64, help="dimension for embedding")
     parser.add_argument('--batch_size', type=int, default=16, help='number of examples in batch')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')

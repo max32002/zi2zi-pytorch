@@ -237,25 +237,9 @@ class CategoryLoss(nn.Module):
         target = self.emb(labels)
         return self.loss(category_logits, target)
 
-class BinaryLoss(nn.Module):
-    def __init__(self, real):
-        super(BinaryLoss, self).__init__()
-        self.bce = nn.BCEWithLogitsLoss()
-        self.real = real
-
-    def forward(self, logits):
-        if self.real:
-            labels = torch.ones(logits.shape[0], 1)
-        else:
-            labels = torch.zeros(logits.shape[0], 1)
-        if logits.is_cuda:
-            labels = labels.cuda()
-        return self.bce(logits, labels)
-
-
 class Zi2ZiModel:
     def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128, ngf=64, ndf=64,
-                 Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
+                 Lconst_penalty=10, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  image_size=256, self_attention=False, residual_block=False, 
                  weight_decay = 1e-5, sequence_count=9, final_channels=1, beta1=0.5, g_blur=False, d_blur=False, epoch=40):
@@ -324,15 +308,11 @@ class Zi2ZiModel:
         self.scheduler_D = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_D, T_max=self.epoch, eta_min=eta_min)
 
         self.category_loss = CategoryLoss(self.embedding_num)
-        self.real_binary_loss = BinaryLoss(True)
-        self.fake_binary_loss = BinaryLoss(False)
         self.l1_loss = nn.L1Loss()
         self.mse = nn.MSELoss()
 
         if self.gpu_ids:
             self.category_loss.cuda()
-            self.real_binary_loss.cuda()
-            self.fake_binary_loss.cuda()
             self.l1_loss.cuda()
             self.mse.cuda()
 
@@ -359,32 +339,41 @@ class Zi2ZiModel:
 
     def backward_D(self, no_target_source=False):
         real_AB = torch.cat([self.real_A, self.real_B], 1)
-        fake_AB = torch.cat([self.real_A, self.fake_B], 1)
+        fake_AB = torch.cat([self.real_A, self.fake_B.detach()], 1)
 
         real_D_logits, real_category_logits = self.netD(real_AB)
-        fake_D_logits, fake_category_logits = self.netD(fake_AB.detach())
+        fake_D_logits, fake_category_logits = self.netD(fake_AB)
 
         real_category_loss = self.category_loss(real_category_logits, self.labels)
         fake_category_loss = self.category_loss(fake_category_logits, self.labels)
         category_loss = (real_category_loss + fake_category_loss) * self.Lcategory_penalty
 
-        d_loss_real = self.real_binary_loss(real_D_logits)
-        d_loss_fake = self.fake_binary_loss(fake_D_logits)
+        # Relativistic Discriminator Loss
+        d_loss = torch.mean(F.logsigmoid(real_D_logits - fake_D_logits) + 
+                             F.logsigmoid(fake_D_logits - real_D_logits))
 
-        self.d_loss = d_loss_real + d_loss_fake + category_loss / 2.0
+        self.d_loss = - d_loss + category_loss / 2.0
         self.d_loss.backward()
         return category_loss
 
     def backward_G(self, no_target_source=False):
         fake_AB = torch.cat([self.real_A, self.fake_B], 1)
+        real_AB = torch.cat([self.real_A, self.real_B], 1)
+
         fake_D_logits, fake_category_logits = self.netD(fake_AB)
+        real_D_logits, _ = self.netD(real_AB)
+
         const_loss = self.Lconst_penalty * self.mse(self.encoded_real_A, self.encoded_fake_B)
         l1_loss = self.L1_penalty * self.l1_loss(self.fake_B, self.real_B)
         fake_category_loss = self.Lcategory_penalty * self.category_loss(fake_category_logits, self.labels)
-        cheat_loss = self.real_binary_loss(fake_D_logits)
-        self.g_loss = cheat_loss + l1_loss + fake_category_loss + const_loss
+
+        # Relativistic Generator Loss
+        g_loss_adv = -torch.mean(F.logsigmoid(fake_D_logits - real_D_logits))
+
+        self.g_loss = g_loss_adv + l1_loss + fake_category_loss + const_loss
         self.g_loss.backward()
-        return const_loss, l1_loss, cheat_loss
+        return const_loss, l1_loss, g_loss_adv
+
 
     def update_lr(self):
         self.scheduler_G.step()
