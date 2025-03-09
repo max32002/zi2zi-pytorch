@@ -17,6 +17,16 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from utils.init_net import init_net
 
+# Residual Skip Connection
+class ResSkip(nn.Module):
+    def __init__(self, channels):
+        super(ResSkip, self).__init__()
+        self.conv = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        return x + self.relu(self.conv(x))
+
 class SelfAttention(nn.Module):
     def __init__(self, channels):
         super(SelfAttention, self).__init__()
@@ -63,7 +73,6 @@ class UnetSkipConnectionBlock(nn.Module):
             upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
             self.down = nn.Sequential(downrelu, downconv)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
-        
         else:
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
             self.down = nn.Sequential(downrelu, downconv, downnorm)
@@ -72,42 +81,42 @@ class UnetSkipConnectionBlock(nn.Module):
                 self.up.add_module("dropout", nn.Dropout(0.5))
 
         self.submodule = submodule
-
-        # 加入 SelfAttention（適用於 layer=4,6）
-        if self_attention and layer in [4, 6]:
-            self.self_attn = SelfAttention(inner_nc)
-        else:
-            self.self_attn = None
+        self.self_attn = SelfAttention(inner_nc) if self_attention and layer in [4, 6] else None
+        self.res_skip = ResSkip(outer_nc) if not outermost and not innermost else None
 
     def forward(self, x, style=None):
+        encoded = self.down(x)
+        if self.self_attn:
+            encoded = self.self_attn(encoded)
+
         if self.innermost:
-            encoded = self.down(x)
             if style is not None:
                 encoded = torch.cat([style.view(style.shape[0], style.shape[1], 1, 1), encoded], dim=1)
             decoded = self.up(encoded)
+            if self.res_skip:
+                decoded = self.res_skip(decoded)
+
             return torch.cat([x, decoded], 1), encoded.view(x.shape[0], -1)
 
         elif self.outermost:
-            encoded = self.down(x)
             if self.submodule:
                 sub_output, encoded_real_A = self.submodule(encoded, style)
             else:
                 sub_output = encoded
             decoded = self.up(sub_output)
+            if self.res_skip:
+                decoded = self.res_skip(decoded)
+
             return decoded, encoded_real_A
 
         else:
-            encoded = self.down(x)
-
-            # Self-Attention（layer=4,6）
-            if self.self_attn is not None:
-                encoded = self.self_attn(encoded)
-
             if self.submodule:
                 sub_output, encoded_real_A = self.submodule(encoded, style)
             else:
                 sub_output = encoded
             decoded = self.up(sub_output)
+            if self.res_skip:
+                decoded = self.res_skip(decoded)
             return torch.cat([x, decoded], 1), encoded_real_A
 
 
