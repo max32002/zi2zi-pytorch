@@ -13,8 +13,7 @@ import torchvision.transforms as T
 import torchvision.utils as vutils
 from PIL import Image
 from torch.nn import init
-from torch.optim import lr_scheduler
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from utils.init_net import init_net
 
@@ -246,12 +245,11 @@ class BinaryLoss(nn.Module):
 
 
 class Zi2ZiModel:
-    def __init__(self, input_nc=3, embedding_num=40, embedding_dim=128,
-                 ngf=64, ndf=64,
+    def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128, ngf=64, ndf=64,
                  Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  image_size=256, self_attention=False, residual_block=False, 
-                 weight_decay = 1e-5, sequence_count=9, final_channels=1, new_final_channels=0, beta1=0.5, g_blur=False, d_blur=False):
+                 weight_decay = 1e-5, sequence_count=9, final_channels=1, beta1=0.5, g_blur=False, d_blur=False, epoch=40):
 
         if is_training:
             self.use_dropout = True
@@ -274,19 +272,18 @@ class Zi2ZiModel:
         self.ndf = ndf
         self.lr = lr
         self.beta1 = beta1
-        self.weight_decay = weight_decay    # L2 正則化強度
+        self.weight_decay = weight_decay
         self.is_training = is_training
         self.image_size = image_size
         self.self_attention=self_attention
         self.residual_block=residual_block
         self.sequence_count = sequence_count
         self.final_channels = final_channels
-        self.new_final_channels = new_final_channels
+        self.epoch = epoch
         self.g_blur = g_blur
         self.d_blur = d_blur
 
     def setup(self):
-
         self.netG = UNetGenerator(
             input_nc=self.input_nc,
             output_nc=self.input_nc,
@@ -295,7 +292,6 @@ class Zi2ZiModel:
             embedding_num=self.embedding_num,
             embedding_dim=self.embedding_dim,
             self_attention=self.self_attention,
-            #residual_block=self.residual_block,
             blur=self.g_blur
         )
         self.netD = Discriminator(
@@ -308,33 +304,21 @@ class Zi2ZiModel:
             blur=self.d_blur
         )
 
-        self.new_netD = None
-        if self.new_final_channels > 0:
-            self.new_netD = Discriminator(
-                input_nc=2 * self.input_nc,
-                embedding_num=self.embedding_num,
-                ndf=self.ndf,
-                sequence_count=self.sequence_count,
-                final_channels=self.new_final_channels,
-                image_size=self.image_size,
-                blur=self.d_blur
-            )
-            init_net(self.new_netD, gpu_ids=self.gpu_ids)
-
         init_net(self.netG, gpu_ids=self.gpu_ids)
         init_net(self.netD, gpu_ids=self.gpu_ids)
 
-        self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
-        self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
-        if self.new_final_channels > 0:
-            self.optimizer_D = torch.optim.Adam(self.new_netD.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
+        self.optimizer_G = torch.optim.AdamW(self.netG.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
+        self.optimizer_D = torch.optim.AdamW(self.netD.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
+        
+        eta_min = 1e-6
+        self.scheduler_G = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_G, T_max=self.epoch, eta_min=eta_min)
+        self.scheduler_D = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_D, T_max=self.epoch, eta_min=eta_min)
 
         self.category_loss = CategoryLoss(self.embedding_num)
         self.real_binary_loss = BinaryLoss(True)
         self.fake_binary_loss = BinaryLoss(False)
         self.l1_loss = nn.L1Loss()
         self.mse = nn.MSELoss()
-        self.sigmoid = nn.Sigmoid()
 
         if self.gpu_ids:
             self.category_loss.cuda()
@@ -342,7 +326,6 @@ class Zi2ZiModel:
             self.fake_binary_loss.cuda()
             self.l1_loss.cuda()
             self.mse.cuda()
-            self.sigmoid.cuda()
 
         if self.is_training:
             self.netD.train()
@@ -386,66 +369,39 @@ class Zi2ZiModel:
     def backward_G(self, no_target_source=False):
         fake_AB = torch.cat([self.real_A, self.fake_B], 1)
         fake_D_logits, fake_category_logits = self.netD(fake_AB)
-
-        # encoding constant loss
-        # this loss assume that generated imaged and real image should reside in the same space and close to each other
         const_loss = self.Lconst_penalty * self.mse(self.encoded_real_A, self.encoded_fake_B)
-        # L1 loss between real and generated images
         l1_loss = self.L1_penalty * self.l1_loss(self.fake_B, self.real_B)
         fake_category_loss = self.Lcategory_penalty * self.category_loss(fake_category_logits, self.labels)
-
         cheat_loss = self.real_binary_loss(fake_D_logits)
-
         self.g_loss = cheat_loss + l1_loss + fake_category_loss + const_loss
         self.g_loss.backward()
         return const_loss, l1_loss, cheat_loss
 
     def update_lr(self):
-        # There should be only one param_group.
-        for p in self.optimizer_D.param_groups:
-            current_lr = p['lr']
-            update_lr = current_lr / 2.0
-            # minimum learning rate guarantee
-            update_lr = max(update_lr, 0.0001)
-            p['lr'] = update_lr
-            print("Decay net_D learning rate from %.5f to %.5f." % (current_lr, update_lr))
-
-        for p in self.optimizer_G.param_groups:
-            current_lr = p['lr']
-            update_lr = current_lr / 2.0
-            # minimum learning rate guarantee
-            update_lr = max(update_lr, 0.0001)
-            p['lr'] = update_lr
-            print("Decay net_G learning rate from %.5f to %.5f." % (current_lr, update_lr))
+        self.scheduler_G.step()
+        self.scheduler_D.step()
+        new_lr_G = self.optimizer_G.param_groups[0]['lr']
+        new_lr_D = self.optimizer_D.param_groups[0]['lr']
+        print(f"Scheduler step executed, current step: {self.scheduler_G.last_epoch}")
+        print(f"Updated learning rate: G = {new_lr_G:.6f}, D = {new_lr_D:.6f}")
 
     def optimize_parameters(self):
-        self.forward()  # compute fake images: G(A)
-        # update D
-        self.set_requires_grad(self.netD, True)  # enable backprop for D
-        self.optimizer_D.zero_grad()  # set D's gradients to zero
-        category_loss = self.backward_D()  # calculate gradients for D
-        self.optimizer_D.step()  # update D's weights
-        # update G
-        self.set_requires_grad(self.netD, False)  # D requires no gradients when optimizing G
-        self.optimizer_G.zero_grad()  # set G's gradients to zero
-        self.backward_G()  # calculate gradients for G
-        self.optimizer_G.step()  # udpate G's weights
-
-        # magic move to Optimize G again
-        # according to https://github.com/carpedm20/DCGAN-tensorflow
-        # collect all the losses along the way
-        self.forward()  # compute fake images: G(A)
-        self.optimizer_G.zero_grad()  # set G's gradients to zero
-        const_loss, l1_loss, cheat_loss = self.backward_G()  # calculate gradients for G
-        self.optimizer_G.step()  # udpate G's weights
-        return const_loss, l1_loss, category_loss, cheat_loss
+        self.forward()
+        self.set_requires_grad(self.netD, True)
+        self.optimizer_D.zero_grad()
+        self.backward_D()
+        self.optimizer_D.step()
+        self.set_requires_grad(self.netD, False)
+        self.optimizer_G.zero_grad()
+        const_loss, l1_loss, cheat_loss = self.backward_G()
+        self.optimizer_G.step()
+        self.forward()
+        self.optimizer_G.zero_grad()
+        const_loss, l1_loss, cheat_loss = self.backward_G()
+        self.optimizer_G.step()
+        return const_loss, l1_loss, cheat_loss
 
     def set_requires_grad(self, nets, requires_grad=False):
-        """Set requies_grad=Fasle for all the networks to avoid unnecessary computations
-        Parameters:
-            nets (network list)   -- a list of networks
-            requires_grad (bool)  -- whether the networks require gradients or not
-        """
         if not isinstance(nets, list):
             nets = [nets]
         for net in nets:
@@ -454,10 +410,6 @@ class Zi2ZiModel:
                     param.requires_grad = requires_grad
 
     def print_networks(self, verbose=False):
-        """Print the total number of parameters in the network and (if verbose) network architecture
-        Parameters:
-            verbose (bool) -- if verbose: print the network architecture
-        """
         print('---------- Networks initialized -------------')
         for name in ['G', 'D']:
             if isinstance(name, str):
@@ -487,16 +439,6 @@ class Zi2ZiModel:
         if os.path.exists(target_filepath_D):
             checkpoint = torch.load(target_filepath_D, weights_only=True)
             self.netD.load_state_dict(torch.load(target_filepath_D, map_location=device))
-            if self.new_final_channels > 0:
-                for key in ["model.8.weight", "model.8.bias", "model.8.running_mean", "model.8.running_var",
-                            "model.9.weight", "model.9.bias", "model.9.running_mean", "model.9.running_var",
-                            "binary.weight", "binary.bias", "catagory.weight", "catagory.bias"]:
-                    if key in checkpoint:
-                        del checkpoint[key]
-                self.new_netD.load_state_dict(checkpoint, strict=False)
-                self.netD = self.new_netD
-                print("✅ 模型遷移到 final_channels=%d，開始訓練" % (self.new_final_channels))
-
         print('load model %d' % epoch)
 
     def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> None:
