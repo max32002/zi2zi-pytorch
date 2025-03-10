@@ -34,14 +34,14 @@ class SelfAttention(nn.Module):
         self.key = nn.Conv2d(channels, channels // 8, kernel_size=1)
         self.value = nn.Conv2d(channels, channels, kernel_size=1)
         self.gamma = nn.Parameter(torch.zeros(1))
+        self.scale = (channels // 8) ** -0.5  # 預先計算縮放因子
 
     def forward(self, x):
         B, C, H, W = x.shape
         proj_query = self.query(x).view(B, -1, H * W).permute(0, 2, 1)  # B, N, C'
         proj_key = self.key(x).view(B, -1, H * W)  # B, C', N
         energy = torch.bmm(proj_query, proj_key)  # B, N, N
-        scale = (C // 8) ** -0.5  # 縮放因子
-        attention = F.softmax(energy * scale, dim=-1)  # B, N, N
+        attention = F.softmax(energy * self.scale, dim=-1)  # B, N, N
         proj_value = self.value(x).view(B, -1, H * W)  # B, C, N
         out = torch.bmm(proj_value, attention.permute(0, 2, 1)).view(B, C, H, W)  # B, C, H, W
         return self.gamma * out + x
@@ -85,16 +85,12 @@ class UnetSkipConnectionBlock(nn.Module):
 
     def _process_submodule(self, encoded, style):
         if self.submodule:
-            sub_output, encoded_real_A = self.submodule(encoded, style)
+            return self.submodule(encoded, style)
         else:
-            sub_output = encoded
-            encoded_real_A = None
-        return sub_output, encoded_real_A
+            return encoded, None
 
     def _interpolate_if_needed(self, decoded, x):
-        if decoded.shape[2:] != x.shape[2:]:
-            decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
-        return decoded
+        return F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False) if decoded.shape[2:] != x.shape[2:] else decoded
 
     def forward(self, x, style=None):
         encoded = self.down(x)
@@ -154,25 +150,19 @@ class UNetGenerator(nn.Module):
 
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
 
-    def forward(self, x, style_or_label=None):
-        """ 生成 fake_B，並獲取 encoded_real_A """
+    def _prepare_style(self, style_or_label):
         if style_or_label is not None and 'LongTensor' in style_or_label.type():
-            style = self.embedder(style_or_label)
+            return self.embedder(style_or_label)
         else:
-            style = style_or_label
-        
+            return style_or_label
+
+    def forward(self, x, style_or_label=None):
+        style = self._prepare_style(style_or_label)
         fake_B, encoded_real_A = self.model(x, style)
-        
         return fake_B, encoded_real_A
 
     def encode(self, x, style_or_label=None):
-        """ 單純回傳編碼特徵 encoded_real_A """
-        if style_or_label is not None and 'LongTensor' in style_or_label.type():
-            style = self.embedder(style_or_label)
-        else:
-            style = style_or_label
-        
-        # Encoder 僅回傳 `encoded_real_A`
+        style = self._prepare_style(style_or_label)
         _, encoded_real_A = self.model(x, style)
         return encoded_real_A
 
@@ -508,66 +498,68 @@ class Zi2ZiModel:
             print('load model %d' % epoch)
         return loaded
 
-    def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> None:
+    def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> np.ndarray:
+        """將張量轉換為 OpenCV 圖像"""
         grid = vutils.make_grid(tensor)
         ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
         return ndarr
 
     def anti_aliasing(self, image, strength=1):
+        """抗鋸齒處理"""
         ksize = max(1, strength * 2 + 1)
         blurred = cv2.GaussianBlur(image, (ksize, ksize), 0)
         return blurred
 
-    def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256, filename_mode="seq", binary_image=True, strength = 0, image_ext="png"):
-        cnt = 0
+    def process_image(self, image, crop_src_font, canvas_size, resize_canvas_size, anti_aliasing_strength, binary_image):
+        """處理圖像：裁剪、縮放、抗鋸齒、二值化"""
+        if crop_src_font:
+            image = image[0:canvas_size, 0:canvas_size]
+            if resize_canvas_size > 0 and canvas_size != resize_canvas_size:
+                image = cv2.resize(image, (resize_canvas_size, resize_canvas_size), interpolation=cv2.INTER_LINEAR)
+            else:
+                image = cv2.resize(image, (canvas_size * 2, canvas_size * 2), interpolation=cv2.INTER_LINEAR)
+                image = self.anti_aliasing(image, 1)
+                image = cv2.resize(image, (canvas_size, canvas_size), interpolation=cv2.INTER_LINEAR)
+            image = self.anti_aliasing(image, anti_aliasing_strength)
+
+        if binary_image:
+            _, image = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY)
+        return image
+
+    def save_image_to_disk(self, image, save_path, image_ext):
+        """將圖像儲存到磁碟，並根據需要轉換為 SVG"""
+        cv2.imwrite(save_path, image)
+        if image_ext == "svg":
+            svg_path = os.path.splitext(save_path)[0] + '.svg'
+            subprocess.call(['potrace', '-b', 'svg', '-u', '60', save_path, '-o', svg_path])
+            os.remove(save_path)
+
+    def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256,
+               filename_mode="seq", binary_image=True, anti_aliasing_strength=1, image_ext="png"):
+        """生成並儲存圖像樣本"""
         with torch.no_grad():
             self.set_input(batch[0], batch[2], batch[1])
             self.forward()
 
-            label_dir = ""
-            tensor_to_plot = torch.cat([self.fake_B, self.real_B], 3)
-            for label, image_tensor in zip(batch[0], tensor_to_plot):
+            output_images = torch.cat([self.fake_B, self.real_B], 3)
+            for i, (label, image_tensor) in enumerate(zip(batch[0], output_images)):
                 label_dir = os.path.join(basename, str(label.item()))
+                os.makedirs(label_dir, exist_ok=True)  # 確保目錄存在
 
-                image_filename = str(cnt)
-                if filename_mode != "seq":
-                    if src_char_list:
-                        if len(src_char_list) > cnt:
-                            if filename_mode == "char":
-                                image_filename = src_char_list[cnt]
-                            if filename_mode == "unicode_hex":
-                                image_filename = str(hex(ord(src_char_list[cnt])))
-                                if len(image_filename) > 0:
-                                    image_filename = image_filename[2:]
-                            if filename_mode == "unicode_int":
-                                image_filename = str(ord(src_char_list[cnt]))
-                saved_image_path = os.path.join(label_dir, image_filename + '.' + image_ext)
-                if image_ext == "svg":
-                    saved_image_path = os.path.join(label_dir, image_filename + '.pgm')
+                if filename_mode == "seq":
+                    filename = str(i)
+                elif src_char_list and i < len(src_char_list):
+                    if filename_mode == "char":
+                        filename = src_char_list[i]
+                    elif filename_mode == "unicode_hex":
+                        filename = hex(ord(src_char_list[i]))[2:]
+                    elif filename_mode == "unicode_int":
+                        filename = str(ord(src_char_list[i]))
+                else:
+                    filename = str(i)  # 如果 src_char_list 不存在或長度不夠，使用序列號
 
-                #vutils.save_image(image_tensor, saved_image_path)
-                opencv_image = self.save_image(image_tensor)
-                opencv_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
-
-                if crop_src_font:
-                    croped_image = opencv_image[0:canvas_size, 0:canvas_size]
-                    if resize_canvas_size > 0 and canvas_size != resize_canvas_size:
-                        croped_image = cv2.resize(croped_image, (resize_canvas_size, resize_canvas_size), interpolation=cv2.INTER_LINEAR)
-                    else:
-                        croped_image = cv2.resize(croped_image, (canvas_size * 2, canvas_size * 2), interpolation=cv2.INTER_LINEAR)
-                        croped_image = self.anti_aliasing(croped_image, 1)
-                        croped_image = cv2.resize(croped_image, (canvas_size, canvas_size), interpolation=cv2.INTER_LINEAR)
-                    croped_image = self.anti_aliasing(croped_image, strength)
-                    opencv_image = croped_image
-                if binary_image:
-                    threshold = 127
-                    ret, opencv_image = cv2.threshold(opencv_image, threshold, 255, cv2.THRESH_BINARY)
-
-                cv2.imwrite(saved_image_path, opencv_image)
-                if image_ext == "svg":
-                    saved_svg_path = os.path.join(label_dir, image_filename + '.svg')
-                    shell_cmd = 'potrace -b svg -u 60 %s -o %s' % (saved_image_path, saved_svg_path)
-                    returned_value = subprocess.call(shell_cmd, shell=True)
-                    os.remove(saved_image_path)
-                cnt += 1
-
+                save_path = os.path.join(label_dir, f"{filename}.{image_ext}")
+                opencv_image = cv2.cvtColor(self.save_image(image_tensor), cv2.COLOR_BGR2GRAY)
+                processed_image = self.process_image(opencv_image, crop_src_font, canvas_size, resize_canvas_size,
+                                                    anti_aliasing_strength, binary_image)
+                self.save_image_to_disk(processed_image, save_path, image_ext)

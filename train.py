@@ -1,10 +1,7 @@
-#!/usr/bin/env python3
-#encoding=utf-8
 import argparse
 import math
 import os
 import random
-import sys
 import time
 
 import torch
@@ -14,71 +11,52 @@ from data import DatasetFromObj
 from model import Zi2ZiModel
 
 
-def chkormakedir(path):
-    if not os.path.isdir(path):
-        os.mkdir(path)
+def ensure_dir(path):
+    """確保目錄存在，不存在則建立"""
+    os.makedirs(path, exist_ok=True)
 
-def empty_google_driver_trash(drive_service):
-    if not drive_service is None:
+
+def clear_google_drive_trash(drive_service):
+    """清空 Google Drive 垃圾桶"""
+    if drive_service:
         try:
-          # 清空 google drive垃圾桶
-          response = drive_service.files().emptyTrash().execute()
-          #print("google drive垃圾桶已清空。")
+            drive_service.files().emptyTrash().execute()
+            # print("Google Drive 垃圾桶已清空。")
         except Exception as e:
-          print(f"發生錯誤：{e}")
-    else:
-        #print("drive_service is None")
-        pass
+            print(f"清空 Google Drive 垃圾桶時發生錯誤：{e}")
+    # else:
+    #     print("drive_service is None")
+
+
+def setup_google_drive_service():
+    """設定 Google Drive 服務"""
+    try:
+        from google.colab import auth
+        from googleapiclient.discovery import build
+
+        auth.authenticate_user()
+        return build('drive', 'v3')
+    except ImportError:
+        print("未檢測到 Google Colab 環境，無法設定 Google Drive 服務。")
+        return None
+    except Exception as e:
+        print(f"設定 Google Drive 服務時發生錯誤：{e}")
+        return None
+
 
 def train(args):
-    args = parser.parse_args()
+    """訓練主函數"""
     random.seed(args.random_seed)
     torch.manual_seed(args.random_seed)
 
-    data_dir = os.path.join(args.experiment_dir, "data")
-    checkpoint_dir = os.path.join(args.experiment_dir, "checkpoint")
-    chkormakedir(checkpoint_dir)
+    data_dir = args.data_dir or os.path.join(args.experiment_dir, "data")
+    checkpoint_dir = args.checkpoint_dir or os.path.join(args.experiment_dir, "checkpoint")
+    ensure_dir(checkpoint_dir)
 
-    # overwrite data dir path.
-    if args.data_dir:
-        data_dir = args.data_dir
-        print("access data object at path: %s" % (data_dir))
+    print(f"資料目錄：{data_dir}")
+    print(f"檢查點目錄：{checkpoint_dir}")
 
-    # overwrite checkpoint dir path.
-    if args.checkpoint_dir :
-        checkpoint_dir = args.checkpoint_dir
-        chkormakedir(checkpoint_dir)
-    print("access checkpoint object at path: %s" % (checkpoint_dir))
-
-    self_attention=False
-    if args.self_attention:
-        self_attention=True
-    residual_block=False
-    if args.residual_block:
-        residual_block=True
-
-    drive_service = None
-    if args.checkpoint_only_last:
-        try:
-            from google.colab import auth
-            from googleapiclient.discovery import build
-
-            # 1. 身份驗證
-            auth.authenticate_user()
-            # 2. 建立 Google Drive API 服務
-            drive_service = build('drive', 'v3')            
-        except Exception as e:
-            print(f"發生錯誤：{e}")
-            pass
-
-    g_blur = False
-    if args.g_blur:
-        g_blur = True
-    d_blur = False
-    if args.d_blur:
-        d_blur = True
-
-    start_time = time.time()
+    drive_service = setup_google_drive_service() if args.checkpoint_only_last else None
 
     model = Zi2ZiModel(
         input_nc=args.input_nc,
@@ -89,13 +67,13 @@ def train(args):
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
         image_size=args.image_size,
-        self_attention=self_attention,
-        residual_block=residual_block,
+        self_attention=args.self_attention,
+        residual_block=args.residual_block,
         final_channels=args.final_channels,
         epoch=args.epoch,
-        g_blur=g_blur,
-        d_blur=d_blur,
-        lr=args.lr
+        g_blur=args.g_blur,
+        d_blur=args.d_blur,
+        lr=args.lr,
     )
 
     model.setup()
@@ -103,52 +81,53 @@ def train(args):
     if args.resume:
         model.load_networks(args.resume)
 
-    train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'),input_nc=args.input_nc)
-    total_batches = math.ceil(len(train_dataset) / args.batch_size)
+    train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'), input_nc=args.input_nc)
     dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    total_batches = math.ceil(len(train_dataset) / args.batch_size)
 
     global_steps = 0
-    need_flush = False
+    start_time = time.time()  # 確保 start_time 被賦值
     for epoch in range(args.epoch):
-        for bid, batch in enumerate(dataloader):
+        for batch_id, batch in enumerate(dataloader):
             model.set_input(batch[0], batch[2], batch[1])
             const_loss, l1_loss, cheat_loss, fm_loss = model.optimize_parameters(args.use_autocast)
-            if bid % 100 == 0:
-                passed = time.time() - start_time
-                log_format = "Epoch: [%2d], [%4d/%4d] time: %d, d_loss: %.5f, g_loss: %.5f, " + \
-                             "cheat_loss: %.5f, const_loss: %.5f, l1_loss: %.5f, fm_loss: %.5f"
-                print(log_format % (epoch, bid, total_batches, passed, model.d_loss.item(), model.g_loss.item(),
-                                    cheat_loss, const_loss, l1_loss, fm_loss))
+
+            if batch_id % 100 == 0:
+                elapsed_time = time.time() - start_time
+                print(
+                    f"Epoch: [{epoch:2d}], [{batch_id:4d}/{total_batches:4d}] "
+                    f"time: {elapsed_time:.0f}, d_loss: {model.d_loss.item():.5f}, "
+                    f"g_loss: {model.g_loss.item():.5f}, cheat_loss: {cheat_loss:.5f}, "
+                    f"const_loss: {const_loss:.5f}, l1_loss: {l1_loss:.5f}, fm_loss: {fm_loss:.5f}"
+                )
+
             if global_steps % args.checkpoint_steps == 0:
                 if global_steps >= args.checkpoint_steps_after:
-                    print("Checkpoint: checkpoint step %d" % global_steps)
+                    print(f"檢查點：檢查點步驟 {global_steps}")
                     model.save_networks(global_steps)
                     if args.checkpoint_only_last:
                         for checkpoint_index in range(0, global_steps, args.checkpoint_steps):
-                            target_filepath = os.path.join(checkpoint_dir, str(checkpoint_index) + "_net_D.pth")
-                            if os.path.isfile(target_filepath):
-                                os.remove(target_filepath)
-                            target_filepath = os.path.join(checkpoint_dir, str(checkpoint_index) + "_net_G.pth")
-                            if os.path.isfile(target_filepath):
-                                os.remove(target_filepath)
-                        empty_google_driver_trash(drive_service)
+                            for net_type in ["D", "G"]:
+                                filepath = os.path.join(checkpoint_dir, f"{checkpoint_index}_net_{net_type}.pth")
+                                if os.path.isfile(filepath):
+                                    os.remove(filepath)
+                        clear_google_drive_trash(drive_service)
                 else:
-                    print("Checkpoint: checkpoint step %d, will save after %d" % (global_steps, args.checkpoint_steps_after))
-                need_flush = False
-            else:
-                need_flush = True
+                    print(
+                        f"檢查點：檢查點步驟 {global_steps}，將在 {args.checkpoint_steps_after} 之後儲存。"
+                    )
             global_steps += 1
+
         if (epoch + 1) % args.schedule == 0:
             model.update_lr()
-    if need_flush:
-        model.save_networks(global_steps)
 
-    passed = time.time() - start_time
-    print('passed time: %4.1f' % (passed))
+    model.save_networks(global_steps)
+    elapsed_time = time.time() - start_time
+    print(f"經過時間：{elapsed_time:.1f} 秒")
+
 
 if __name__ == '__main__':
-    import argparse
-
+    parser = argparse.ArgumentParser(description='Train')
     parser = argparse.ArgumentParser(description='Train')
     parser.add_argument('--experiment_dir', required=True,
                         help='experiment directory, data, samples,checkpoints,etc')
@@ -193,6 +172,5 @@ if __name__ == '__main__':
     parser.add_argument('--g_blur', action='store_true')
     parser.add_argument('--d_blur', action='store_true')
     parser.add_argument("--use_autocast", action="store_true", help="Enable autocast for mixed precision training")
-
     args = parser.parse_args()
     train(args)
