@@ -17,6 +17,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from utils.init_net import init_net
 
+
 # Residual Skip Connection
 class ResSkip(nn.Module):
     def __init__(self, channels):
@@ -57,7 +58,6 @@ class UnetSkipConnectionBlock(nn.Module):
 
         if input_nc is None:
             input_nc = outer_nc
-        
         downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
         downrelu = nn.LeakyReLU(0.2, True)
         downnorm = norm_layer(inner_nc)
@@ -68,7 +68,6 @@ class UnetSkipConnectionBlock(nn.Module):
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
             self.down = nn.Sequential(downconv)
             self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
-        
         elif innermost:
             upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
             self.down = nn.Sequential(downrelu, downconv)
@@ -86,6 +85,7 @@ class UnetSkipConnectionBlock(nn.Module):
 
     def forward(self, x, style=None):
         encoded = self.down(x)
+
         if self.self_attn:
             encoded = self.self_attn(encoded)
 
@@ -93,9 +93,10 @@ class UnetSkipConnectionBlock(nn.Module):
             if style is not None:
                 encoded = torch.cat([style.view(style.shape[0], style.shape[1], 1, 1), encoded], dim=1)
             decoded = self.up(encoded)
+            if decoded.shape[2:] != x.shape[2:]:
+                decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
             if self.res_skip:
                 decoded = self.res_skip(decoded)
-
             return torch.cat([x, decoded], 1), encoded.view(x.shape[0], -1)
 
         elif self.outermost:
@@ -115,8 +116,11 @@ class UnetSkipConnectionBlock(nn.Module):
             else:
                 sub_output = encoded
             decoded = self.up(sub_output)
+            if decoded.shape[2:] != x.shape[2:]:
+                decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
             if self.res_skip:
                 decoded = self.res_skip(decoded)
+            
             return torch.cat([x, decoded], 1), encoded_real_A
 
 
