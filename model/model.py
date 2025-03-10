@@ -12,13 +12,13 @@ import torch.nn.functional as F
 import torchvision.transforms as T
 import torchvision.utils as vutils
 from PIL import Image
+from torch.cuda.amp import GradScaler, autocast
 from torch.nn import init
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from utils.init_net import init_net
 
 
-# Residual Skip Connection
 class ResSkip(nn.Module):
     def __init__(self, channels):
         super(ResSkip, self).__init__()
@@ -177,7 +177,7 @@ class UNetGenerator(nn.Module):
         return encoded_real_A
 
 class Discriminator(nn.Module):
-    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256, sequence_count=9, final_channels=1, blur=False):
+    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256, final_channels=1, blur=False):
         super(Discriminator, self).__init__()
         if type(norm_layer) == functools.partial:  # no need to use bias as BatchNorm2d has affine parameters
             use_bias = norm_layer.func != nn.BatchNorm2d
@@ -191,7 +191,7 @@ class Discriminator(nn.Module):
         ]
         nf_mult = 1
         nf_mult_prev = 1
-        for n in range(1, 3):  # gradually increase the number of filters
+        for n in range(1, 3):
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
             sequence += [
@@ -206,9 +206,8 @@ class Discriminator(nn.Module):
             norm_layer(final_channels),
             nn.LeakyReLU(0.2, True)
         ]
-        if sequence_count > 8:
-            sequence += [nn.Conv2d(final_channels, 1, kernel_size=kw, stride=1, padding=padw)]
-            final_channels = 1
+        sequence += [nn.Conv2d(final_channels, 1, kernel_size=kw, stride=1, padding=padw)]
+        final_channels = 1
 
         self.model = nn.Sequential(*sequence)
         image_size = math.ceil(image_size / 2)
@@ -246,7 +245,7 @@ class Zi2ZiModel:
                  Lconst_penalty=10, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  image_size=256, self_attention=False, residual_block=False, 
-                 weight_decay = 1e-5, sequence_count=9, final_channels=1, beta1=0.5, g_blur=False, d_blur=False, epoch=40):
+                 weight_decay = 1e-5, final_channels=1, beta1=0.5, g_blur=False, d_blur=False, epoch=40):
 
         if is_training:
             self.use_dropout = True
@@ -274,12 +273,13 @@ class Zi2ZiModel:
         self.image_size = image_size
         self.self_attention=self_attention
         self.residual_block=residual_block
-        self.sequence_count = sequence_count
         self.final_channels = final_channels
         self.epoch = epoch
         self.g_blur = g_blur
         self.d_blur = d_blur
 
+        self.scaler_G = GradScaler()
+        self.scaler_D = GradScaler()
         device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
         self.device = device
 
@@ -299,7 +299,6 @@ class Zi2ZiModel:
             input_nc=2 * self.input_nc,
             embedding_num=self.embedding_num,
             ndf=self.ndf,
-            sequence_count=self.sequence_count,
             final_channels=self.final_channels,
             image_size=self.image_size,
             blur=self.d_blur
@@ -373,14 +372,13 @@ class Zi2ZiModel:
         fake_category_loss = self.category_loss(fake_category_logits, self.labels)
         category_loss = (real_category_loss + fake_category_loss) * self.Lcategory_penalty
 
-        d_loss = torch.mean(F.logsigmoid(real_D_logits - fake_D_logits) + 
-                             F.logsigmoid(fake_D_logits - real_D_logits))
+        d_loss = torch.mean(F.logsigmoid(real_D_logits - fake_D_logits) +
+                            F.logsigmoid(fake_D_logits - real_D_logits))
 
         gp = self.compute_gradient_penalty(real_AB, fake_AB)
 
         gradient_penalty_weight = 10.0  # 梯度懲罰的權重
         self.d_loss = - d_loss + category_loss / 2.0 + gradient_penalty_weight * gp
-        self.d_loss.backward()
         return category_loss
 
     def backward_G(self, no_target_source=False):
@@ -395,8 +393,55 @@ class Zi2ZiModel:
         fake_category_loss = self.Lcategory_penalty * self.category_loss(fake_category_logits, self.labels)
         g_loss_adv = -torch.mean(F.logsigmoid(fake_D_logits - real_D_logits))
         self.g_loss = g_loss_adv + l1_loss + fake_category_loss + const_loss
-        self.g_loss.backward()
         return const_loss, l1_loss, g_loss_adv
+
+    def optimize_parameters(self, use_autocast=False):
+        self.forward()
+        self.set_requires_grad(self.netD, True)
+        self.optimizer_D.zero_grad()
+        if use_autocast:
+            with autocast():
+                category_loss = self.backward_D()
+                scaled_d_loss = self.scaler_D.scale(self.d_loss)  # 縮放 D 的損失
+            scaled_d_loss.backward()
+            self.scaler_D.step(self.optimizer_D)
+            self.scaler_D.update()
+        else:
+            category_loss = self.backward_D()
+            self.d_loss.backward()
+            self.optimizer_D.step()
+
+        self.set_requires_grad(self.netD, False)
+        self.optimizer_G.zero_grad()
+        const_loss, l1_loss, cheat_loss = 0, 0, 0  # 初始化變數
+
+        if use_autocast:
+            with autocast():
+                const_loss, l1_loss, cheat_loss = self.backward_G()
+                scaled_g_loss = self.scaler_G.scale(self.g_loss)  # 縮放 G 的損失
+            scaled_g_loss.backward()
+            self.scaler_G.step(self.optimizer_G)
+            self.scaler_G.update()
+        else:
+            const_loss, l1_loss, cheat_loss = self.backward_G()
+            self.g_loss.backward()
+            self.optimizer_G.step()
+
+        self.forward()
+        self.optimizer_G.zero_grad()
+
+        if use_autocast:
+            with autocast():
+                const_loss, l1_loss, cheat_loss = self.backward_G()
+                scaled_g_loss = self.scaler_G.scale(self.g_loss)  # 再次縮放 G 的損失
+            scaled_g_loss.backward()
+            self.scaler_G.step(self.optimizer_G)
+            self.scaler_G.update()
+        else:
+            const_loss, l1_loss, cheat_loss = self.backward_G()
+            self.g_loss.backward()
+            self.optimizer_G.step()
+        return const_loss, l1_loss, cheat_loss
 
     def update_lr(self):
         self.scheduler_G.step()
@@ -405,22 +450,6 @@ class Zi2ZiModel:
         new_lr_D = self.optimizer_D.param_groups[0]['lr']
         print(f"Scheduler step executed, current step: {self.scheduler_G.last_epoch}")
         print(f"Updated learning rate: G = {new_lr_G:.6f}, D = {new_lr_D:.6f}")
-
-    def optimize_parameters(self):
-        self.forward()
-        self.set_requires_grad(self.netD, True)
-        self.optimizer_D.zero_grad()
-        self.backward_D()
-        self.optimizer_D.step()
-        self.set_requires_grad(self.netD, False)
-        self.optimizer_G.zero_grad()
-        const_loss, l1_loss, cheat_loss = self.backward_G()
-        self.optimizer_G.step()
-        self.forward()
-        self.optimizer_G.zero_grad()
-        const_loss, l1_loss, cheat_loss = self.backward_G()
-        self.optimizer_G.step()
-        return const_loss, l1_loss, cheat_loss
 
     def set_requires_grad(self, nets, requires_grad=False):
         if not isinstance(nets, list):
@@ -485,7 +514,6 @@ class Zi2ZiModel:
         return blurred
 
     def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256, filename_mode="seq", binary_image=True, strength = 0, image_ext="png"):
-        #chk_mkdir(basename)
         cnt = 0
         with torch.no_grad():
             self.set_input(batch[0], batch[2], batch[1])
@@ -536,10 +564,5 @@ class Zi2ZiModel:
                     shell_cmd = 'potrace -b svg -u 60 %s -o %s' % (saved_image_path, saved_svg_path)
                     returned_value = subprocess.call(shell_cmd, shell=True)
                     os.remove(saved_image_path)
-
                 cnt += 1
 
-
-def chk_mkdir(path):
-    if not os.path.isdir(path):
-        os.mkdir(path)

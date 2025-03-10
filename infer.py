@@ -86,7 +86,6 @@ def infer(args):
         image_size=args.image_size,
         self_attention=self_attention,
         residual_block=residual_block,
-        sequence_count=args.sequence_count,
         final_channels=args.final_channels,
         is_training=False
     )
@@ -249,7 +248,6 @@ if __name__ == '__main__':
     parser.add_argument('--residual_block', action='store_true')
     parser.add_argument('--anti_alias', type=int, default=0)
     parser.add_argument('--image_ext', type=str, default='png', help='infer image format')
-    parser.add_argument('--sequence_count', type=int, default=9, help="discriminator layer count")
     parser.add_argument('--final_channels', type=int, default=1, help="discriminator final channels")
     parser.add_argument('--filename_rule', type=str, default="unicode_int", choices=['seq', 'char', 'unicode_int', 'unicode_hex'])
 

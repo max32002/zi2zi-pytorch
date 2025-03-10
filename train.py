@@ -91,7 +91,6 @@ def train(args):
         image_size=args.image_size,
         self_attention=self_attention,
         residual_block=residual_block,
-        sequence_count=args.sequence_count,
         final_channels=args.final_channels,
         epoch=args.epoch,
         g_blur=g_blur,
@@ -113,7 +112,7 @@ def train(args):
     for epoch in range(args.epoch):
         for bid, batch in enumerate(dataloader):
             model.set_input(batch[0], batch[2], batch[1])
-            const_loss, l1_loss, cheat_loss = model.optimize_parameters()
+            const_loss, l1_loss, cheat_loss = model.optimize_parameters(args.use_autocast)
             if bid % 100 == 0:
                 passed = time.time() - start_time
                 log_format = "Epoch: [%2d], [%4d/%4d] time: %d, d_loss: %.5f, g_loss: %.5f, " + \
@@ -190,10 +189,10 @@ if __name__ == '__main__':
                         help='number of input images channels')
     parser.add_argument('--self_attention', action='store_true')
     parser.add_argument('--residual_block', action='store_true')
-    parser.add_argument('--sequence_count', type=int, default=9, help="discriminator layer count")
     parser.add_argument('--final_channels', type=int, default=1, help="discriminator final channels")
     parser.add_argument('--g_blur', action='store_true')
     parser.add_argument('--d_blur', action='store_true')
+    parser.add_argument("--use_autocast", action="store_true", help="Enable autocast for mixed precision training")
 
     args = parser.parse_args()
     train(args)
