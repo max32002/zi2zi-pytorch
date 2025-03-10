@@ -17,8 +17,10 @@ from torchvision.utils import make_grid, save_image
 
 from data import DatasetFromObj
 from model import Zi2ZiModel
-from model.model import chk_mkdir
 
+def chkormakedir(path):
+    if not os.path.isdir(path):
+        os.mkdir(path)
 
 def convert_to_gray_binary(example_img, ksize=1, threshold=127):
     opencvImage = cv2.cvtColor(np.array(example_img), cv2.COLOR_RGB2BGR)
@@ -44,7 +46,7 @@ def draw_single_char(ch, font, canvas_size, x_offset = 0, y_offset = 0):
 
 def infer(args):
     args = parser.parse_args()
-    chk_mkdir(args.experiment_dir)
+    chkormakedir(args.experiment_dir)
     data_dir = os.path.join(args.experiment_dir, "data")
     checkpoint_dir = os.path.join(args.experiment_dir, "checkpoint")
     infer_dir = os.path.join(args.experiment_dir, "infer")
@@ -56,10 +58,10 @@ def infer(args):
             infer_dir = os.path.expanduser(infer_dir)
     
     print("generate infer images at path: %s" % (infer_dir))
-    chk_mkdir(infer_dir)
+    chkormakedir(infer_dir)
 
     infer_with_label_dir = os.path.join(infer_dir, str(args.label))
-    chk_mkdir(infer_with_label_dir)
+    chkormakedir(infer_with_label_dir)
 
     # overwrite checkpoint dir path.
     if args.checkpoint_dir :

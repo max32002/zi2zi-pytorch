@@ -112,13 +112,13 @@ def train(args):
     for epoch in range(args.epoch):
         for bid, batch in enumerate(dataloader):
             model.set_input(batch[0], batch[2], batch[1])
-            const_loss, l1_loss, cheat_loss = model.optimize_parameters(args.use_autocast)
+            const_loss, l1_loss, cheat_loss, fm_loss = model.optimize_parameters(args.use_autocast)
             if bid % 100 == 0:
                 passed = time.time() - start_time
                 log_format = "Epoch: [%2d], [%4d/%4d] time: %d, d_loss: %.5f, g_loss: %.5f, " + \
-                             "cheat_loss: %.5f, const_loss: %.5f, l1_loss: %.5f"
+                             "cheat_loss: %.5f, const_loss: %.5f, l1_loss: %.5f, fm_loss: %.5f"
                 print(log_format % (epoch, bid, total_batches, passed, model.d_loss.item(), model.g_loss.item(),
-                                    cheat_loss, const_loss, l1_loss))
+                                    cheat_loss, const_loss, l1_loss, fm_loss))
             if global_steps % args.checkpoint_steps == 0:
                 if global_steps >= args.checkpoint_steps_after:
                     print("Checkpoint: checkpoint step %d" % global_steps)

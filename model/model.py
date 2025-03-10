@@ -18,7 +18,6 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from utils.init_net import init_net
 
-
 class ResSkip(nn.Module):
     def __init__(self, channels):
         super(ResSkip, self).__init__()
@@ -38,30 +37,31 @@ class SelfAttention(nn.Module):
 
     def forward(self, x):
         B, C, H, W = x.shape
-        proj_query = self.query(x).view(B, -1, H * W).permute(0, 2, 1)  
-        proj_key = self.key(x).view(B, -1, H * W)  
-        energy = torch.bmm(proj_query, proj_key)  
-        attention = F.softmax(energy, dim=-1)  
-        proj_value = self.value(x).view(B, -1, H * W)  
-        out = torch.bmm(proj_value, attention.permute(0, 2, 1)).view(B, C, H, W)  
-        return self.gamma * out + x  
+        proj_query = self.query(x).view(B, -1, H * W).permute(0, 2, 1)  # B, N, C'
+        proj_key = self.key(x).view(B, -1, H * W)  # B, C', N
+        energy = torch.bmm(proj_query, proj_key)  # B, N, N
+        scale = (C // 8) ** -0.5  # 縮放因子
+        attention = F.softmax(energy * scale, dim=-1)  # B, N, N
+        proj_value = self.value(x).view(B, -1, H * W)  # B, C, N
+        out = torch.bmm(proj_value, attention.permute(0, 2, 1)).view(B, C, H, W)  # B, C, H, W
+        return self.gamma * out + x
 
 class UnetSkipConnectionBlock(nn.Module):
-    def __init__(self, outer_nc, inner_nc, input_nc=None, submodule=None, 
-                 norm_layer=nn.BatchNorm2d, layer=0, embedding_dim=128, 
+    def __init__(self, outer_nc, inner_nc, input_nc=None, submodule=None,
+                 norm_layer=nn.InstanceNorm2d, layer=0, embedding_dim=128,
                  use_dropout=False, self_attention=False, blur=False, outermost=False, innermost=False):
         super(UnetSkipConnectionBlock, self).__init__()
-        
+
         self.outermost = outermost
         self.innermost = innermost
-        use_bias = norm_layer != nn.BatchNorm2d  # 若使用 BatchNorm，則 bias=False
+        use_bias = norm_layer != nn.BatchNorm2d
 
         if input_nc is None:
             input_nc = outer_nc
         downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
         downrelu = nn.LeakyReLU(0.2, True)
         downnorm = norm_layer(inner_nc)
-        uprelu = nn.ReLU(inplace=False)  # 這裡必須是 False
+        uprelu = nn.ReLU(inplace=False)
         upnorm = norm_layer(outer_nc)
 
         if outermost:
@@ -77,11 +77,24 @@ class UnetSkipConnectionBlock(nn.Module):
             self.down = nn.Sequential(downrelu, downconv, downnorm)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_dropout:
-                self.up.add_module("dropout", nn.Dropout(0.5))
+                self.up.add_module("dropout", nn.Dropout(0.3))  # 加入 dropout 來增加正則化效果
 
         self.submodule = submodule
         self.self_attn = SelfAttention(inner_nc) if self_attention and layer in [4, 6] else None
         self.res_skip = ResSkip(outer_nc) if not outermost and not innermost else None
+
+    def _process_submodule(self, encoded, style):
+        if self.submodule:
+            sub_output, encoded_real_A = self.submodule(encoded, style)
+        else:
+            sub_output = encoded
+            encoded_real_A = None
+        return sub_output, encoded_real_A
+
+    def _interpolate_if_needed(self, decoded, x):
+        if decoded.shape[2:] != x.shape[2:]:
+            decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
+        return decoded
 
     def forward(self, x, style=None):
         encoded = self.down(x)
@@ -93,34 +106,21 @@ class UnetSkipConnectionBlock(nn.Module):
             if style is not None:
                 encoded = torch.cat([style.view(style.shape[0], style.shape[1], 1, 1), encoded], dim=1)
             decoded = self.up(encoded)
-            if decoded.shape[2:] != x.shape[2:]:
-                decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
+            decoded = self._interpolate_if_needed(decoded, x)
             if self.res_skip:
                 decoded = self.res_skip(decoded)
             return torch.cat([x, decoded], 1), encoded.view(x.shape[0], -1)
 
-        elif self.outermost:
-            if self.submodule:
-                sub_output, encoded_real_A = self.submodule(encoded, style)
-            else:
-                sub_output = encoded
-            decoded = self.up(sub_output)
-            if self.res_skip:
-                decoded = self.res_skip(decoded)
+        sub_output, encoded_real_A = self._process_submodule(encoded, style)
+        decoded = self.up(sub_output)
+        decoded = self._interpolate_if_needed(decoded, x)
 
+        if self.res_skip:
+            decoded = self.res_skip(decoded)
+
+        if self.outermost:
             return decoded, encoded_real_A
-
         else:
-            if self.submodule:
-                sub_output, encoded_real_A = self.submodule(encoded, style)
-            else:
-                sub_output = encoded
-            decoded = self.up(sub_output)
-            if decoded.shape[2:] != x.shape[2:]:
-                decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
-            if self.res_skip:
-                decoded = self.res_skip(decoded)
-            
             return torch.cat([x, decoded], 1), encoded_real_A
 
 
@@ -177,45 +177,40 @@ class UNetGenerator(nn.Module):
         return encoded_real_A
 
 class Discriminator(nn.Module):
-    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256, final_channels=1, blur=False):
+    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.InstanceNorm2d, 
+                 image_size=256, final_channels=1, blur=False):
         super(Discriminator, self).__init__()
-        if type(norm_layer) == functools.partial:  # no need to use bias as BatchNorm2d has affine parameters
-            use_bias = norm_layer.func != nn.BatchNorm2d
-        else:
-            use_bias = norm_layer != nn.BatchNorm2d
+        
+        use_bias = norm_layer != nn.BatchNorm2d
         kw = 5
         padw = 2
+
         sequence = [
-            nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw),
+            nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw)),
             nn.LeakyReLU(0.2, True)
         ]
+
         nf_mult = 1
-        nf_mult_prev = 1
         for n in range(1, 3):
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
             sequence += [
-                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias),
+                nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
                 norm_layer(ndf * nf_mult),
                 nn.LeakyReLU(0.2, True)
             ]
-        nf_mult_prev = nf_mult
-        nf_mult = 8
+
         sequence += [
-            nn.Conv2d(ndf * nf_mult_prev, final_channels, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
+            nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, final_channels, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
             norm_layer(final_channels),
             nn.LeakyReLU(0.2, True)
         ]
-        sequence += [nn.Conv2d(final_channels, 1, kernel_size=kw, stride=1, padding=padw)]
-        final_channels = 1
 
         self.model = nn.Sequential(*sequence)
-        image_size = math.ceil(image_size / 2)
-        image_size = math.ceil(image_size / 2)
-        image_size = math.ceil(image_size / 2)
+        image_size = math.ceil(image_size / 8)
         final_features = final_channels * image_size * image_size
         self.binary = nn.Linear(final_features, 1)
-        self.catagory = nn.Linear(final_features, embedding_num)
+        self.category = nn.Linear(final_features, embedding_num)
         self.blur = blur
         self.gaussian_blur = T.GaussianBlur(kernel_size=1, sigma=1.0)  # 設定模糊程度
 
@@ -225,8 +220,8 @@ class Discriminator(nn.Module):
             features = self.gaussian_blur(features)
         features = features.view(input.shape[0], -1)
         binary_logits = self.binary(features)
-        catagory_logits = self.catagory(features)
-        return binary_logits, catagory_logits
+        category_logits = self.category(features)
+        return binary_logits, category_logits
 
 class CategoryLoss(nn.Module):
     def __init__(self, category_num):
@@ -282,6 +277,7 @@ class Zi2ZiModel:
         self.scaler_D = GradScaler()
         device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
         self.device = device
+        self.feature_matching_loss = nn.L1Loss()
 
 
     def setup(self):
@@ -343,7 +339,12 @@ class Zi2ZiModel:
     def forward(self):
         self.fake_B, self.encoded_real_A = self.netG(self.real_A, self.labels)
         self.encoded_fake_B = self.netG.encode(self.fake_B, self.labels)
-    
+
+    def compute_feature_matching_loss(self, real_AB, fake_AB):
+        real_features = self.netD.model[:-1](real_AB)
+        fake_features = self.netD.model[:-1](fake_AB)
+        return self.feature_matching_loss(real_features, fake_features)
+
     def compute_gradient_penalty(self, real_samples, fake_samples):
         alpha = torch.rand(real_samples.size(0), 1, 1, 1, device=self.device)
         interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
@@ -392,17 +393,21 @@ class Zi2ZiModel:
         l1_loss = self.L1_penalty * self.l1_loss(self.fake_B, self.real_B)
         fake_category_loss = self.Lcategory_penalty * self.category_loss(fake_category_logits, self.labels)
         g_loss_adv = -torch.mean(F.logsigmoid(fake_D_logits - real_D_logits))
-        self.g_loss = g_loss_adv + l1_loss + fake_category_loss + const_loss
-        return const_loss, l1_loss, g_loss_adv
+
+        # 計算 Feature Matching Loss
+        fm_loss = self.compute_feature_matching_loss(real_AB, fake_AB)
+
+        self.g_loss = g_loss_adv + l1_loss + fake_category_loss + const_loss + fm_loss
+        return const_loss, l1_loss, g_loss_adv, fm_loss
 
     def optimize_parameters(self, use_autocast=False):
         self.forward()
         self.set_requires_grad(self.netD, True)
         self.optimizer_D.zero_grad()
         if use_autocast:
-            with autocast():
+            with torch.amp.autocast(device_type='cuda'): # 修改這裡
                 category_loss = self.backward_D()
-                scaled_d_loss = self.scaler_D.scale(self.d_loss)  # 縮放 D 的損失
+                scaled_d_loss = self.scaler_D.scale(self.d_loss)
             scaled_d_loss.backward()
             self.scaler_D.step(self.optimizer_D)
             self.scaler_D.update()
@@ -413,17 +418,17 @@ class Zi2ZiModel:
 
         self.set_requires_grad(self.netD, False)
         self.optimizer_G.zero_grad()
-        const_loss, l1_loss, cheat_loss = 0, 0, 0  # 初始化變數
+        const_loss, l1_loss, cheat_loss, fm_loss = 0, 0, 0, 0
 
         if use_autocast:
-            with autocast():
-                const_loss, l1_loss, cheat_loss = self.backward_G()
-                scaled_g_loss = self.scaler_G.scale(self.g_loss)  # 縮放 G 的損失
+            with torch.amp.autocast(device_type='cuda'):
+                const_loss, l1_loss, cheat_loss, fm_loss = self.backward_G()
+                scaled_g_loss = self.scaler_G.scale(self.g_loss)
             scaled_g_loss.backward()
             self.scaler_G.step(self.optimizer_G)
             self.scaler_G.update()
         else:
-            const_loss, l1_loss, cheat_loss = self.backward_G()
+            const_loss, l1_loss, cheat_loss, fm_loss = self.backward_G()
             self.g_loss.backward()
             self.optimizer_G.step()
 
@@ -431,17 +436,17 @@ class Zi2ZiModel:
         self.optimizer_G.zero_grad()
 
         if use_autocast:
-            with autocast():
-                const_loss, l1_loss, cheat_loss = self.backward_G()
-                scaled_g_loss = self.scaler_G.scale(self.g_loss)  # 再次縮放 G 的損失
+            with torch.amp.autocast(device_type='cuda'):
+                const_loss, l1_loss, cheat_loss, fm_loss = self.backward_G()
+                scaled_g_loss = self.scaler_G.scale(self.g_loss)
             scaled_g_loss.backward()
             self.scaler_G.step(self.optimizer_G)
             self.scaler_G.update()
         else:
-            const_loss, l1_loss, cheat_loss = self.backward_G()
+            const_loss, l1_loss, cheat_loss, fm_loss = self.backward_G()
             self.g_loss.backward()
             self.optimizer_G.step()
-        return const_loss, l1_loss, cheat_loss
+        return const_loss, l1_loss, cheat_loss, fm_loss
 
     def update_lr(self):
         self.scheduler_G.step()
