@@ -92,7 +92,8 @@ def infer(args):
     )
     model.setup()
     model.print_networks(True)
-    model.load_networks(args.resume)
+    if not model.load_networks(args.resume):
+        return
 
     t1 = time.time()
 

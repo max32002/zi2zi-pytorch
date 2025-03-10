@@ -116,7 +116,7 @@ def train(args):
             const_loss, l1_loss, cheat_loss = model.optimize_parameters()
             if bid % 100 == 0:
                 passed = time.time() - start_time
-                log_format = "Epoch: [%2d], [%4d/%4d] time: %4.2f, d_loss: %.5f, g_loss: %.5f, " + \
+                log_format = "Epoch: [%2d], [%4d/%4d] time: %d, d_loss: %.5f, g_loss: %.5f, " + \
                              "cheat_loss: %.5f, const_loss: %.5f, l1_loss: %.5f"
                 print(log_format % (epoch, bid, total_batches, passed, model.d_loss.item(), model.g_loss.item(),
                                     cheat_loss, const_loss, l1_loss))

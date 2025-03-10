@@ -280,6 +280,10 @@ class Zi2ZiModel:
         self.g_blur = g_blur
         self.d_blur = d_blur
 
+        device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
+        self.device = device
+
+
     def setup(self):
         self.netG = UNetGenerator(
             input_nc=self.input_nc,
@@ -342,11 +346,10 @@ class Zi2ZiModel:
         self.encoded_fake_B = self.netG.encode(self.fake_B, self.labels)
     
     def compute_gradient_penalty(self, real_samples, fake_samples):
-        device = real_samples.device
-        alpha = torch.rand(real_samples.size(0), 1, 1, 1, device=device)
+        alpha = torch.rand(real_samples.size(0), 1, 1, 1, device=self.device)
         interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
         interpolates_logits, _ = self.netD(interpolates)
-        grad_outputs = torch.ones(interpolates_logits.size(), device=device)
+        grad_outputs = torch.ones(interpolates_logits.size(), device=self.device)
         gradients = torch.autograd.grad(
             outputs=interpolates_logits, 
             inputs=interpolates, 
@@ -441,29 +444,39 @@ class Zi2ZiModel:
         print('-----------------------------------------------')
 
     def save_networks(self, epoch):
+        assert isinstance(self.netG.state_dict(), dict), "netG.state_dict() should be a dictionary"
+        assert isinstance(self.netD.state_dict(), dict), "netD.state_dict() should be a dictionary"
+
         torch.save(self.netG.state_dict(), os.path.join(self.save_dir, f"{epoch}_net_G.pth"))
         torch.save(self.netD.state_dict(), os.path.join(self.save_dir, f"{epoch}_net_D.pth"))
         print(f"💾 Checkpoint saved at epoch {epoch}")
 
     def load_networks(self, epoch):
+        loaded = False
         target_filepath_G = os.path.join(self.save_dir, f"{epoch}_net_G.pth")
         target_filepath_D = os.path.join(self.save_dir, f"{epoch}_net_D.pth")
-        
-        device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
-
         if os.path.exists(target_filepath_G):
-            self.netG.load_state_dict(torch.load(target_filepath_G, map_location=device))
-        
+            try:
+                self.netG.load_state_dict(torch.load(target_filepath_G, map_location=self.device, weights_only=True))
+                loaded = True
+            except Exception as e:
+                print(f"Error loading {target_filepath_G}: {e}")
+        else:
+            print('file not exist:', target_filepath_G)
+
         if os.path.exists(target_filepath_D):
-            checkpoint = torch.load(target_filepath_D, weights_only=True)
-            self.netD.load_state_dict(torch.load(target_filepath_D, map_location=device))
-        print('load model %d' % epoch)
+            try:
+                self.netD.load_state_dict(torch.load(target_filepath_D, map_location=self.device, weights_only=True))
+            except Exception as e:
+                print(f"Error loading {target_filepath_D}: {e}")
+
+        if loaded:
+            print('load model %d' % epoch)
+        return loaded
 
     def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> None:
         grid = vutils.make_grid(tensor)
-        # Add 0.5 after unnormalizing to [0, 255] to round to the nearest integer
         ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
-        #im = Image.fromarray(ndarr)
         return ndarr
 
     def anti_aliasing(self, image, strength=1):
