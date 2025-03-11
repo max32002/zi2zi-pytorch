@@ -122,7 +122,7 @@ class UnetSkipConnectionBlock(nn.Module):
 
 class UNetGenerator(nn.Module):
     def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
-                 norm_layer=nn.BatchNorm2d, use_dropout=False, self_attention=False, blur=False):
+                 norm_layer=nn.InstanceNorm2d, use_dropout=False, self_attention=False, blur=False):
         super(UNetGenerator, self).__init__()
         
         # 最底層（innermost），負責風格嵌入處理
@@ -167,7 +167,7 @@ class UNetGenerator(nn.Module):
         return encoded_real_A
 
 class Discriminator(nn.Module):
-    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.InstanceNorm2d, 
+    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, 
                  image_size=256, final_channels=1, blur=False):
         super(Discriminator, self).__init__()
         
@@ -279,7 +279,8 @@ class Zi2ZiModel:
             embedding_num=self.embedding_num,
             embedding_dim=self.embedding_dim,
             self_attention=self.self_attention,
-            blur=self.g_blur
+            blur=self.g_blur,
+            norm_layer=nn.InstanceNorm2d
         )
         self.netD = Discriminator(
             input_nc=2 * self.input_nc,
@@ -287,7 +288,8 @@ class Zi2ZiModel:
             ndf=self.ndf,
             final_channels=self.final_channels,
             image_size=self.image_size,
-            blur=self.d_blur
+            blur=self.d_blur,
+            norm_layer=nn.BatchNorm2d
         )
 
         init_net(self.netG, gpu_ids=self.gpu_ids)

@@ -103,7 +103,7 @@ def train(args):
 
             if global_steps % args.checkpoint_steps == 0:
                 if global_steps >= args.checkpoint_steps_after:
-                    print(f"檢查點：檢查點步驟 {global_steps}")
+                    print(f"checkpoint: current step {global_steps}")
                     model.save_networks(global_steps)
                     if args.checkpoint_only_last:
                         for checkpoint_index in range(0, global_steps, args.checkpoint_steps):
@@ -113,9 +113,7 @@ def train(args):
                                     os.remove(filepath)
                         clear_google_drive_trash(drive_service)
                 else:
-                    print(
-                        f"檢查點：檢查點步驟 {global_steps}，將在 {args.checkpoint_steps_after} 之後儲存。"
-                    )
+                    print(f"checkpoint: current step {global_steps}，save after step {args.checkpoint_steps_after}")
             global_steps += 1
 
         if (epoch + 1) % args.schedule == 0:
@@ -123,7 +121,7 @@ def train(args):
 
     model.save_networks(global_steps)
     elapsed_time = time.time() - start_time
-    print(f"經過時間：{elapsed_time:.1f} 秒")
+    print(f"經過時間：{elapsed_time:4d} 秒")
 
 
 if __name__ == '__main__':
