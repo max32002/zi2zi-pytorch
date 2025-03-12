@@ -5,6 +5,7 @@ import random
 import time
 
 import torch
+#torch.autograd.set_detect_anomaly(True)  # 添加異常檢測
 from torch.utils.data import DataLoader
 
 from data import DatasetFromObj
@@ -90,7 +91,7 @@ def train(args):
     for epoch in range(args.epoch):
         for batch_id, batch in enumerate(dataloader):
             model.set_input(batch[0], batch[2], batch[1])
-            const_loss, l1_loss, cheat_loss, fm_loss = model.optimize_parameters(args.use_autocast)
+            const_loss, l1_loss, cheat_loss, fm_loss, vgg_loss = model.optimize_parameters(args.use_autocast)
 
             if batch_id % 100 == 0:
                 elapsed_time = time.time() - start_time
@@ -98,7 +99,7 @@ def train(args):
                     f"Epoch: [{epoch:2d}], [{batch_id:4d}/{total_batches:4d}] "
                     f"time: {elapsed_time:.0f}, d_loss: {model.d_loss.item():.5f}, "
                     f"g_loss: {model.g_loss.item():.5f}, cheat_loss: {cheat_loss:.5f}, "
-                    f"const_loss: {const_loss:.5f}, l1_loss: {l1_loss:.5f}, fm_loss: {fm_loss:.5f}"
+                    f"const_loss: {const_loss:.5f}, l1_loss: {l1_loss:.5f}, fm_loss: {fm_loss:.5f}, vgg_loss: {vgg_loss:.5f}"
                 )
 
             if global_steps % args.checkpoint_steps == 0:

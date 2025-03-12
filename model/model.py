@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
 import torchvision.utils as vutils
+import torchvision.models as models
 from PIL import Image
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn import init
@@ -77,7 +78,7 @@ class UnetSkipConnectionBlock(nn.Module):
             self.down = nn.Sequential(downrelu, downconv, downnorm)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_dropout:
-                self.up.add_module("dropout", nn.Dropout(0.3))  # 加入 dropout 來增加正則化效果
+                self.up.add_module("dropout", nn.Dropout(0.3))
 
         self.submodule = submodule
         self.self_attn = SelfAttention(inner_nc) if self_attention and layer in [4, 6] else None
@@ -108,6 +109,7 @@ class UnetSkipConnectionBlock(nn.Module):
             return torch.cat([x, decoded], 1), encoded.view(x.shape[0], -1)
 
         sub_output, encoded_real_A = self._process_submodule(encoded, style)
+
         decoded = self.up(sub_output)
         decoded = self._interpolate_if_needed(decoded, x)
 
@@ -118,7 +120,6 @@ class UnetSkipConnectionBlock(nn.Module):
             return decoded, encoded_real_A
         else:
             return torch.cat([x, decoded], 1), encoded_real_A
-
 
 class UNetGenerator(nn.Module):
     def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
@@ -225,12 +226,45 @@ class CategoryLoss(nn.Module):
         target = self.emb(labels)
         return self.loss(category_logits, target)
 
+class PerceptualLoss(nn.Module):
+    def __init__(self):
+        super(PerceptualLoss, self).__init__()
+        vgg = models.vgg16(pretrained=True).features
+        self.slice1 = nn.Sequential(*list(vgg[:4]))   # Conv1_2 (Input: 3 channels -> 64 channels)
+        self.slice2 = nn.Sequential(*list(vgg[4:9]))  # Conv2_2 (Input: 64 channels -> 128 channels)
+        self.slice3 = nn.Sequential(*list(vgg[9:16])) # Conv3_3 (Input: 128 channels -> 256 channels)
+        self.slice4 = nn.Sequential(*list(vgg[16:23]))# Conv4_3 (Input: 256 channels -> 512 channels)
+
+        for param in self.parameters():
+            param.requires_grad = False
+
+    def forward(self, x, y):
+        """將灰階 (1 通道) 轉換為 RGB (3 通道)，再傳入 VGG 模型"""
+        if x.shape[1] == 1:
+            x = x.repeat(1, 3, 1, 1)  # (N, 1, H, W) -> (N, 3, H, W)
+            y = y.repeat(1, 3, 1, 1)
+
+        # 確保輸入尺寸符合 VGG 預期
+        x1, y1 = self.slice1(x), self.slice1(y)  # (N, 64, H, W)
+        x2, y2 = self.slice2(x1), self.slice2(y1)  # (N, 128, H, W)
+        x3, y3 = self.slice3(x2), self.slice3(y2)  # (N, 256, H, W)
+        x4, y4 = self.slice4(x3), self.slice4(y3)  # (N, 512, H, W)
+
+        loss = (
+            nn.functional.l1_loss(x1, y1) +
+            nn.functional.l1_loss(x2, y2) +
+            nn.functional.l1_loss(x3, y3) +
+            nn.functional.l1_loss(x4, y4)
+        )
+        return loss
+
 class Zi2ZiModel:
     def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128, ngf=64, ndf=64,
                  Lconst_penalty=10, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  image_size=256, self_attention=False, residual_block=False, 
-                 weight_decay = 1e-5, final_channels=1, beta1=0.5, g_blur=False, d_blur=False, epoch=40):
+                 weight_decay = 1e-5, final_channels=1, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
+                 gradient_clip=1.0):
 
         if is_training:
             self.use_dropout = True
@@ -241,10 +275,13 @@ class Zi2ZiModel:
         self.Lcategory_penalty = Lcategory_penalty
         self.L1_penalty = L1_penalty
 
+        self.epoch = epoch
         self.schedule = schedule
 
         self.save_dir = save_dir
         self.gpu_ids = gpu_ids
+        device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
+        self.device = device
 
         self.input_nc = input_nc
         self.embedding_dim = embedding_dim
@@ -259,15 +296,13 @@ class Zi2ZiModel:
         self.self_attention=self_attention
         self.residual_block=residual_block
         self.final_channels = final_channels
-        self.epoch = epoch
         self.g_blur = g_blur
         self.d_blur = d_blur
 
         self.scaler_G = GradScaler()
         self.scaler_D = GradScaler()
-        device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
-        self.device = device
         self.feature_matching_loss = nn.L1Loss()
+        self.gradient_clip = gradient_clip
 
 
     def setup(self):
@@ -302,6 +337,7 @@ class Zi2ZiModel:
         self.scheduler_G = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_G, T_max=self.epoch, eta_min=eta_min)
         self.scheduler_D = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_D, T_max=self.epoch, eta_min=eta_min)
 
+        self.vgg_loss = PerceptualLoss().to(self.device)
         self.category_loss = CategoryLoss(self.embedding_num)
         self.l1_loss = nn.L1Loss()
         self.mse = nn.MSELoss()
@@ -370,8 +406,9 @@ class Zi2ZiModel:
 
         gp = self.compute_gradient_penalty(real_AB, fake_AB)
 
-        gradient_penalty_weight = 10.0  # 梯度懲罰的權重
+        gradient_penalty_weight = 10.0
         self.d_loss = - d_loss + category_loss / 2.0 + gradient_penalty_weight * gp
+
         return category_loss
 
     def backward_G(self, no_target_source=False):
@@ -386,42 +423,52 @@ class Zi2ZiModel:
         fake_category_loss = self.Lcategory_penalty * self.category_loss(fake_category_logits, self.labels)
         g_loss_adv = -torch.mean(F.logsigmoid(fake_D_logits - real_D_logits))
 
-        # 計算 Feature Matching Loss
         fm_loss = self.compute_feature_matching_loss(real_AB, fake_AB)
 
         self.g_loss = g_loss_adv + l1_loss + fake_category_loss + const_loss + fm_loss
-        return const_loss, l1_loss, g_loss_adv, fm_loss
+        
+        perceptual_loss = self.vgg_loss(self.fake_B, self.real_B)
+
+        self.g_loss += 10 * perceptual_loss  # 設定感知損失的權重
+
+        return const_loss, l1_loss, g_loss_adv, fm_loss, perceptual_loss
 
     def optimize_parameters(self, use_autocast=False):
         self.forward()
         self.set_requires_grad(self.netD, True)
         self.optimizer_D.zero_grad()
         if use_autocast:
-            with torch.amp.autocast(device_type='cuda'): # 修改這裡
+            with torch.amp.autocast(device_type='cuda'):
                 category_loss = self.backward_D()
                 scaled_d_loss = self.scaler_D.scale(self.d_loss)
-            scaled_d_loss.backward()
-            self.scaler_D.step(self.optimizer_D)
-            self.scaler_D.update()
+                scaled_d_loss.backward()
+                self.scaler_D.unscale_(self.optimizer_D) # 取消縮放來進行梯度裁剪
+                torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
+                self.scaler_D.step(self.optimizer_D)
+                self.scaler_D.update()
         else:
             category_loss = self.backward_D()
             self.d_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
             self.optimizer_D.step()
 
         self.set_requires_grad(self.netD, False)
         self.optimizer_G.zero_grad()
-        const_loss, l1_loss, cheat_loss, fm_loss = 0, 0, 0, 0
+        const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss   = 0, 0, 0, 0, 0
 
         if use_autocast:
             with torch.amp.autocast(device_type='cuda'):
-                const_loss, l1_loss, cheat_loss, fm_loss = self.backward_G()
+                const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss   = self.backward_G()
                 scaled_g_loss = self.scaler_G.scale(self.g_loss)
-            scaled_g_loss.backward()
-            self.scaler_G.step(self.optimizer_G)
-            self.scaler_G.update()
+                scaled_g_loss.backward()
+                self.scaler_G.unscale_(self.optimizer_G) # 取消縮放來進行梯度裁剪
+                torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip) # 梯度裁剪
+                self.scaler_G.step(self.optimizer_G)
+                self.scaler_G.update()
         else:
-            const_loss, l1_loss, cheat_loss, fm_loss = self.backward_G()
+            const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss   = self.backward_G()
             self.g_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip) # 梯度裁剪
             self.optimizer_G.step()
 
         self.forward()
@@ -429,16 +476,19 @@ class Zi2ZiModel:
 
         if use_autocast:
             with torch.amp.autocast(device_type='cuda'):
-                const_loss, l1_loss, cheat_loss, fm_loss = self.backward_G()
+                const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss   = self.backward_G()
                 scaled_g_loss = self.scaler_G.scale(self.g_loss)
-            scaled_g_loss.backward()
-            self.scaler_G.step(self.optimizer_G)
-            self.scaler_G.update()
+                scaled_g_loss.backward()
+                self.scaler_G.unscale_(self.optimizer_G)
+                torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
+                self.scaler_G.step(self.optimizer_G)
+                self.scaler_G.update()
         else:
-            const_loss, l1_loss, cheat_loss, fm_loss = self.backward_G()
+            const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss   = self.backward_G()
             self.g_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
             self.optimizer_G.step()
-        return const_loss, l1_loss, cheat_loss, fm_loss
+        return const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss  
 
     def update_lr(self):
         self.scheduler_G.step()
