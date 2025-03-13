@@ -9,15 +9,16 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.models as models
 import torchvision.transforms as T
 import torchvision.utils as vutils
-import torchvision.models as models
 from PIL import Image
-from torch.cuda.amp import GradScaler, autocast
 from torch.nn import init
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torchvision.models import VGG16_Weights
 
 from utils.init_net import init_net
+
 
 class ResSkip(nn.Module):
     def __init__(self, channels):
@@ -229,7 +230,7 @@ class CategoryLoss(nn.Module):
 class PerceptualLoss(nn.Module):
     def __init__(self):
         super(PerceptualLoss, self).__init__()
-        vgg = models.vgg16(pretrained=True).features
+        vgg = models.vgg16(weights=VGG16_Weights.DEFAULT).features
         self.slice1 = nn.Sequential(*list(vgg[:4]))   # Conv1_2 (Input: 3 channels -> 64 channels)
         self.slice2 = nn.Sequential(*list(vgg[4:9]))  # Conv2_2 (Input: 64 channels -> 128 channels)
         self.slice3 = nn.Sequential(*list(vgg[9:16])) # Conv3_3 (Input: 128 channels -> 256 channels)
@@ -299,8 +300,9 @@ class Zi2ZiModel:
         self.g_blur = g_blur
         self.d_blur = d_blur
 
-        self.scaler_G = GradScaler()
-        self.scaler_D = GradScaler()
+
+        self.scaler_G = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
+        self.scaler_D = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
         self.feature_matching_loss = nn.L1Loss()
         self.gradient_clip = gradient_clip
 

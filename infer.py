@@ -1,13 +1,16 @@
 import argparse
 import os
 import time
+
 import cv2
 import numpy as np
 import torch
 import torchvision.transforms as transforms
 from PIL import Image, ImageDraw, ImageFont
 from torch.utils.data import DataLoader, TensorDataset
+
 from model import Zi2ZiModel
+
 
 def ensure_dir(path):
     """確保目錄存在，不存在則建立"""
