@@ -27,8 +27,6 @@ parser.add_argument('--experiment_infer_dir', type=str, default=None,
                     help='overwrite infer dir path')
 parser.add_argument('--start_from', type=int, default=0)
 parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
-parser.add_argument('--image_size', type=int, default=256,
-                    help="size of your input and output image")
 parser.add_argument('--L1_penalty', type=int, default=100, help='weight for L1 loss')
 parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
 # parser.add_argument('--Ltv_penalty', dest='Ltv_penalty', type=float, default=0.0, help='weight for tv loss')

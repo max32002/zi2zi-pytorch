@@ -67,7 +67,6 @@ def train(args):
         Lcategory_penalty=args.Lcategory_penalty,
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
-        image_size=args.image_size,
         self_attention=args.self_attention,
         residual_block=args.residual_block,
         final_channels=args.final_channels,
@@ -135,8 +134,6 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint_dir', type=str, default=None,
                         help='overwrite checkpoint dir path, if data dir is not same with checkpoint dir')
     parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
-    parser.add_argument('--image_size', type=int, default=256,
-                        help="size of your input and output image")
     parser.add_argument('--L1_penalty', type=int, default=100, help='weight for L1 loss')
     parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
     parser.add_argument('--Lcategory_penalty', type=float, default=1.0, help='weight for category loss')

@@ -76,7 +76,7 @@ def infer(args):
     model = Zi2ZiModel(
         input_nc=args.input_nc, embedding_num=args.embedding_num, embedding_dim=args.embedding_dim,
         Lconst_penalty=args.Lconst_penalty, Lcategory_penalty=args.Lcategory_penalty, save_dir=checkpoint_dir,
-        gpu_ids=args.gpu_ids, image_size=args.image_size, self_attention=args.self_attention,
+        gpu_ids=args.gpu_ids, self_attention=args.self_attention,
         residual_block=args.residual_block, final_channels=args.final_channels, is_training=False
     )
     model.setup()
@@ -123,8 +123,6 @@ if __name__ == '__main__':
                         help='overwrite infer dir path')
     parser.add_argument('--start_from', type=int, default=0)
     parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
-    parser.add_argument('--image_size', type=int, default=256,
-                        help="size of your input and output image")
     parser.add_argument('--L1_penalty', type=int, default=100, help='weight for L1 loss')
     parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
     parser.add_argument('--Lcategory_penalty', type=float, default=1.0, help='weight for category loss')

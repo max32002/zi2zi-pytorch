@@ -169,10 +169,10 @@ class UNetGenerator(nn.Module):
         return encoded_real_A
 
 class Discriminator(nn.Module):
-    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, 
-                 image_size=256, final_channels=1, blur=False):
+    def __init__(self, input_nc=1, embedding_num=40, ndf=64, norm_layer=nn.BatchNorm2d, 
+                 final_channels=1, blur=False):
         super(Discriminator, self).__init__()
-        
+
         use_bias = norm_layer != nn.BatchNorm2d
         kw = 5
         padw = 2
@@ -199,18 +199,24 @@ class Discriminator(nn.Module):
         ]
 
         self.model = nn.Sequential(*sequence)
-        image_size = math.ceil(image_size / 8)
-        final_features = final_channels * image_size * image_size
-        self.binary = nn.Linear(final_features, 1)
-        self.category = nn.Linear(final_features, embedding_num)
+        self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))  # 確保最終輸出是 (batch_size, C, 1, 1)
         self.blur = blur
         self.gaussian_blur = T.GaussianBlur(kernel_size=1, sigma=1.0)  # 設定模糊程度
+        self.embedding_num = embedding_num
 
     def forward(self, input):
         features = self.model(input)
         if self.blur:
             features = self.gaussian_blur(features)
-        features = features.view(input.shape[0], -1)
+
+        features = self.global_avg_pool(features)  # 變成 (batch_size, C, 1, 1)
+        features = features.view(features.shape[0], -1)  # 變成 (batch_size, C)
+
+        final_features = features.shape[1]  # 動態取得 feature 維度
+        if not hasattr(self, "binary") or not hasattr(self, "category"):
+            self.binary = nn.Linear(final_features, 1).to(features.device)
+            self.category = nn.Linear(final_features, self.embedding_num).to(features.device)
+
         binary_logits = self.binary(features)
         category_logits = self.category(features)
         return binary_logits, category_logits
@@ -263,7 +269,7 @@ class Zi2ZiModel:
     def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128, ngf=64, ndf=64,
                  Lconst_penalty=10, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
-                 image_size=256, self_attention=False, residual_block=False, 
+                 self_attention=False, residual_block=False, 
                  weight_decay = 1e-5, final_channels=1, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
                  gradient_clip=1.0):
 
@@ -293,7 +299,6 @@ class Zi2ZiModel:
         self.beta1 = beta1
         self.weight_decay = weight_decay
         self.is_training = is_training
-        self.image_size = image_size
         self.self_attention=self_attention
         self.residual_block=residual_block
         self.final_channels = final_channels
@@ -324,7 +329,6 @@ class Zi2ZiModel:
             embedding_num=self.embedding_num,
             ndf=self.ndf,
             final_channels=self.final_channels,
-            image_size=self.image_size,
             blur=self.d_blur,
             norm_layer=nn.BatchNorm2d
         )
@@ -533,24 +537,42 @@ class Zi2ZiModel:
         loaded = False
         target_filepath_G = os.path.join(self.save_dir, f"{epoch}_net_G.pth")
         target_filepath_D = os.path.join(self.save_dir, f"{epoch}_net_D.pth")
+
         if os.path.exists(target_filepath_G):
             try:
-                self.netG.load_state_dict(torch.load(target_filepath_G, map_location=self.device, weights_only=True))
+                self.netG.load_state_dict(torch.load(target_filepath_G, map_location=self.device), strict=False)
                 loaded = True
             except Exception as e:
                 print(f"Error loading {target_filepath_G}: {e}")
         else:
-            print('file not exist:', target_filepath_G)
+            print(f"File not found: {target_filepath_G}")
 
         if os.path.exists(target_filepath_D):
             try:
-                self.netD.load_state_dict(torch.load(target_filepath_D, map_location=self.device, weights_only=True))
+                state_dict = torch.load(target_filepath_D, map_location=self.device)
+                self.netD.load_state_dict(state_dict, strict=False)  # 忽略形狀不匹配的層
+                self._initialize_unmatched_weights(self.netD, state_dict)  # 初始化未載入的層
             except Exception as e:
                 print(f"Error loading {target_filepath_D}: {e}")
 
         if loaded:
-            print('load model %d' % epoch)
+            print(f"✅ Model {epoch} loaded successfully")
         return loaded
+
+    def _initialize_unmatched_weights(self, model, loaded_state_dict):
+        """ 初始化 `netD` 中未載入的層 """
+        for name, param in model.named_parameters():
+            if name not in loaded_state_dict:
+                print(f"🔄 Re-initializing layer: {name}")
+                if "weight" in name:
+                    nn.init.kaiming_normal_(param, mode='fan_out', nonlinearity='leaky_relu')
+                elif "bias" in name:
+                    nn.init.constant_(param, 0)
+
+        for name, buffer in model.named_buffers():
+            if name not in loaded_state_dict:
+                print(f"🔄 Re-initializing buffer: {name}")
+                buffer.zero_()
 
     def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> np.ndarray:
         """將張量轉換為 OpenCV 圖像"""
@@ -569,24 +591,27 @@ class Zi2ZiModel:
         if crop_src_font:
             image = image[0:canvas_size, 0:canvas_size]
             if resize_canvas_size > 0 and canvas_size != resize_canvas_size:
-                image = cv2.resize(image, (resize_canvas_size, resize_canvas_size), interpolation=cv2.INTER_LINEAR)
+                image = cv2.resize(image, (resize_canvas_size, resize_canvas_size), interpolation=cv2.INTER_LANCZOS4)
             else:
-                image = cv2.resize(image, (canvas_size * 2, canvas_size * 2), interpolation=cv2.INTER_LINEAR)
+                image = cv2.resize(image, (canvas_size * 2, canvas_size * 2), interpolation=cv2.INTER_CUBIC)
                 image = self.anti_aliasing(image, 1)
-                image = cv2.resize(image, (canvas_size, canvas_size), interpolation=cv2.INTER_LINEAR)
+                image = cv2.resize(image, (canvas_size, canvas_size), interpolation=cv2.INTER_CUBIC)
             image = self.anti_aliasing(image, anti_aliasing_strength)
 
         if binary_image:
             _, image = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY)
         return image
 
-    def save_image_to_disk(self, image, save_path, image_ext):
+    def save_image_to_disk(self, image, label_dir, filename, image_ext):
         """將圖像儲存到磁碟，並根據需要轉換為 SVG"""
-        cv2.imwrite(save_path, image)
+        save_path = os.path.join(label_dir, f"{filename}.{image_ext}")
         if image_ext == "svg":
-            svg_path = os.path.splitext(save_path)[0] + '.svg'
-            subprocess.call(['potrace', '-b', 'svg', '-u', '60', save_path, '-o', svg_path])
-            os.remove(save_path)
+            save_path_pgm = os.path.join(label_dir, f"{filename}.pgm")
+            cv2.imwrite(save_path_pgm, image)
+            subprocess.call(['potrace', '-b', 'svg', '-u', '60', save_path_pgm, '-o', save_path])
+            os.remove(save_path_pgm)
+        else:
+            cv2.imwrite(save_path, image)
 
     def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256,
                filename_mode="seq", binary_image=True, anti_aliasing_strength=1, image_ext="png"):
@@ -612,8 +637,7 @@ class Zi2ZiModel:
                 else:
                     filename = str(i)  # 如果 src_char_list 不存在或長度不夠，使用序列號
 
-                save_path = os.path.join(label_dir, f"{filename}.{image_ext}")
                 opencv_image = cv2.cvtColor(self.save_image(image_tensor), cv2.COLOR_BGR2GRAY)
                 processed_image = self.process_image(opencv_image, crop_src_font, canvas_size, resize_canvas_size,
                                                     anti_aliasing_strength, binary_image)
-                self.save_image_to_disk(processed_image, save_path, image_ext)
+                self.save_image_to_disk(processed_image, label_dir, filename, image_ext)
