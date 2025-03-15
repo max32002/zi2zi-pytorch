@@ -18,11 +18,6 @@ from tqdm import tqdm
 
 from utils.charset_util import processGlyphNames
 
-CN_CHARSET = None
-CN_T_CHARSET = None
-JP_CHARSET = None
-KR_CHARSET = None
-
 def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0, auto_fit=True):
     img = None
     if auto_fit:
@@ -105,12 +100,7 @@ def draw_font2font_example(ch, src_font, dst_font, canvas_size, src_x_offset, sr
     example_img = Image.new("RGB", (canvas_size * 2, canvas_size), (255, 255, 255))
     example_img.paste(dst_img, (0, 0))
     example_img.paste(src_img, (canvas_size, 0))
-
-    # convert to gray img
-    #example_img = example_img.convert('L')
-
     example_img = convert_to_gray_binary(example_img, 1, 127)
-
     return example_img
 
 

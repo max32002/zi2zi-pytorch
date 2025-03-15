@@ -122,7 +122,7 @@ def train(args):
 
     model.save_networks(global_steps)
     elapsed_time = time.time() - start_time
-    print(f"經過時間：{elapsed_time:4d} 秒")
+    print(f"經過時間：{elapsed_time:4.1f} 秒")
 
 
 if __name__ == '__main__':
@@ -146,20 +146,12 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=16, help='number of examples in batch')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
     parser.add_argument('--schedule', type=int, default=20, help='number of epochs to half learning rate')
-    parser.add_argument('--freeze_encoder', action='store_true',
-                        help="freeze encoder weights during training")
-    parser.add_argument('--fine_tune', type=str, default=None,
-                        help='specific labels id to be fine tuned')
-    parser.add_argument('--inst_norm', action='store_true',
-                        help='use conditional instance normalization in your model')
     parser.add_argument('--checkpoint_steps', type=int, default=100,
                         help='number of batches in between two checkpoints')
     parser.add_argument('--checkpoint_steps_after', type=int, default=1,
                         help='save the number of batches after')
     parser.add_argument('--checkpoint_only_last', action='store_true',
                         help='remove all previous versions, only keep last version')
-    parser.add_argument('--flip_labels', action='store_true',
-                        help='whether flip training data labels or not, in fine tuning')
     parser.add_argument('--random_seed', type=int, default=777,
                         help='random seed for random and pytorch')
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
