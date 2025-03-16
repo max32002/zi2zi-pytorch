@@ -74,6 +74,7 @@ def train(args):
         g_blur=args.g_blur,
         d_blur=args.d_blur,
         lr=args.lr,
+        norm_type=args.norm_type
     )
 
     model.setup()
@@ -160,5 +161,6 @@ if __name__ == '__main__':
     parser.add_argument('--g_blur', action='store_true')
     parser.add_argument('--d_blur', action='store_true')
     parser.add_argument("--use_autocast", action="store_true", help="Enable autocast for mixed precision training")
+    parser.add_argument("--norm_type", type=str, default="instance", help="normalization type: instance or batch")
     args = parser.parse_args()
     train(args)

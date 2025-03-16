@@ -209,10 +209,10 @@ class Discriminator(nn.Module):
         if self.blur:
             features = self.gaussian_blur(features)
 
-        features = self.global_avg_pool(features)  # 變成 (batch_size, C, 1, 1)
-        features = features.view(features.shape[0], -1)  # 變成 (batch_size, C)
+        features = self.global_avg_pool(features)
+        features = features.view(features.shape[0], -1)
 
-        final_features = features.shape[1]  # 動態取得 feature 維度
+        final_features = features.shape[1]
         if not hasattr(self, "binary") or not hasattr(self, "category"):
             self.binary = nn.Linear(final_features, 1).to(features.device)
             self.category = nn.Linear(final_features, self.embedding_num).to(features.device)
@@ -271,7 +271,9 @@ class Zi2ZiModel:
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  self_attention=False, residual_block=False, 
                  weight_decay = 1e-5, final_channels=1, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
-                 gradient_clip=1.0):
+                 gradient_clip=0.5, norm_type="instance"):
+
+        self.norm_type = norm_type  # 保存 norm_type
 
         if is_training:
             self.use_dropout = True
@@ -311,8 +313,12 @@ class Zi2ZiModel:
         self.feature_matching_loss = nn.L1Loss()
         self.gradient_clip = gradient_clip
 
-
     def setup(self):
+        if self.norm_type == "batch":
+            norm_layer = nn.BatchNorm2d
+        else:  # 預設或 instance
+            norm_layer = nn.InstanceNorm2d
+
         self.netG = UNetGenerator(
             input_nc=self.input_nc,
             output_nc=self.input_nc,
@@ -322,7 +328,7 @@ class Zi2ZiModel:
             embedding_dim=self.embedding_dim,
             self_attention=self.self_attention,
             blur=self.g_blur,
-            norm_layer=nn.InstanceNorm2d
+            norm_layer=norm_layer
         )
         self.netD = Discriminator(
             input_nc=2 * self.input_nc,
@@ -434,8 +440,8 @@ class Zi2ZiModel:
         self.g_loss = g_loss_adv + l1_loss + fake_category_loss + const_loss + fm_loss
         
         perceptual_loss = self.vgg_loss(self.fake_B, self.real_B)
-
-        self.g_loss += 10 * perceptual_loss  # 設定感知損失的權重
+        perceptual_weight = 10.0  # 感知損失的權重
+        self.g_loss += perceptual_weight * perceptual_loss
 
         return const_loss, l1_loss, g_loss_adv, fm_loss, perceptual_loss
 
@@ -457,6 +463,11 @@ class Zi2ZiModel:
             self.d_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
             self.optimizer_D.step()
+
+        # 檢查判別器損失是否為 NaN
+        if torch.isnan(self.d_loss):
+            print("判別器損失為 NaN，停止訓練。")
+            return  # 或執行其他適當的錯誤處理
 
         self.set_requires_grad(self.netD, False)
         self.optimizer_G.zero_grad()
