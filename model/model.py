@@ -24,10 +24,11 @@ class ResSkip(nn.Module):
     def __init__(self, channels):
         super(ResSkip, self).__init__()
         self.conv = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        self.relu = nn.ReLU(inplace=True)
+        self.norm = nn.GroupNorm(8, channels)  # **改用 GroupNorm 來減少 BatchNorm 依賴**
+        self.relu = nn.SiLU(inplace=True)  # **用 SiLU 替換 ReLU，減少死神經元問題**
 
     def forward(self, x):
-        return x + self.relu(self.conv(x))
+        return x + self.relu(self.norm(self.conv(x)))
 
 class SelfAttention(nn.Module):
     def __init__(self, channels):
@@ -35,17 +36,17 @@ class SelfAttention(nn.Module):
         self.query = nn.Conv2d(channels, channels // 8, kernel_size=1)
         self.key = nn.Conv2d(channels, channels // 8, kernel_size=1)
         self.value = nn.Conv2d(channels, channels, kernel_size=1)
-        self.gamma = nn.Parameter(torch.zeros(1))
-        self.scale = (channels // 8) ** -0.5  # 預先計算縮放因子
+        self.gamma = nn.Parameter(torch.ones(1) * 0.1)
+        self.scale = (channels // 8) ** -0.5
 
     def forward(self, x):
         B, C, H, W = x.shape
-        proj_query = self.query(x).view(B, -1, H * W).permute(0, 2, 1)  # B, N, C'
-        proj_key = self.key(x).view(B, -1, H * W)  # B, C', N
-        energy = torch.bmm(proj_query, proj_key)  # B, N, N
-        attention = F.softmax(energy * self.scale, dim=-1)  # B, N, N
-        proj_value = self.value(x).view(B, -1, H * W)  # B, C, N
-        out = torch.bmm(proj_value, attention.permute(0, 2, 1)).view(B, C, H, W)  # B, C, H, W
+        proj_query = self.query(x).view(B, -1, H * W).permute(0, 2, 1)
+        proj_key = self.key(x).view(B, -1, H * W)
+        energy = torch.bmm(proj_query, proj_key)
+        attention = F.softmax(energy * self.scale, dim=-1)
+        proj_value = self.value(x).view(B, -1, H * W)
+        out = torch.bmm(proj_value, attention.permute(0, 2, 1)).view(B, C, H, W)
         return self.gamma * out + x
 
 class UnetSkipConnectionBlock(nn.Module):
@@ -61,6 +62,7 @@ class UnetSkipConnectionBlock(nn.Module):
         if input_nc is None:
             input_nc = outer_nc
         downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+        nn.init.kaiming_normal_(downconv.weight, nonlinearity='leaky_relu')
         downrelu = nn.LeakyReLU(0.2, True)
         downnorm = norm_layer(inner_nc)
         uprelu = nn.ReLU(inplace=False)
@@ -68,14 +70,17 @@ class UnetSkipConnectionBlock(nn.Module):
 
         if outermost:
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downconv)
             self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
         elif innermost:
             upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downrelu, downconv)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
         else:
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downrelu, downconv, downnorm)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_dropout:
@@ -449,19 +454,20 @@ class Zi2ZiModel:
         self.forward()
         self.set_requires_grad(self.netD, True)
         self.optimizer_D.zero_grad()
+
         if use_autocast:
             with torch.amp.autocast(device_type='cuda'):
                 category_loss = self.backward_D()
                 scaled_d_loss = self.scaler_D.scale(self.d_loss)
                 scaled_d_loss.backward()
-                self.scaler_D.unscale_(self.optimizer_D) # 取消縮放來進行梯度裁剪
-                torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
+                self.scaler_D.unscale_(self.optimizer_D)
+                grad_norm_d = torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
                 self.scaler_D.step(self.optimizer_D)
                 self.scaler_D.update()
         else:
             category_loss = self.backward_D()
             self.d_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
+            grad_norm_d = torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
             self.optimizer_D.step()
 
         # 檢查判別器損失是否為 NaN
@@ -471,21 +477,21 @@ class Zi2ZiModel:
 
         self.set_requires_grad(self.netD, False)
         self.optimizer_G.zero_grad()
-        const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss   = 0, 0, 0, 0, 0
+        const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = 0, 0, 0, 0, 0
 
         if use_autocast:
             with torch.amp.autocast(device_type='cuda'):
-                const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss   = self.backward_G()
+                const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
                 scaled_g_loss = self.scaler_G.scale(self.g_loss)
                 scaled_g_loss.backward()
-                self.scaler_G.unscale_(self.optimizer_G) # 取消縮放來進行梯度裁剪
-                torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip) # 梯度裁剪
+                self.scaler_G.unscale_(self.optimizer_G)
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
                 self.scaler_G.step(self.optimizer_G)
                 self.scaler_G.update()
         else:
-            const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss   = self.backward_G()
+            const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
             self.g_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip) # 梯度裁剪
+            grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
             self.optimizer_G.step()
 
         self.forward()
@@ -493,19 +499,24 @@ class Zi2ZiModel:
 
         if use_autocast:
             with torch.amp.autocast(device_type='cuda'):
-                const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss   = self.backward_G()
+                const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
                 scaled_g_loss = self.scaler_G.scale(self.g_loss)
                 scaled_g_loss.backward()
                 self.scaler_G.unscale_(self.optimizer_G)
-                torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
                 self.scaler_G.step(self.optimizer_G)
                 self.scaler_G.update()
         else:
-            const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss   = self.backward_G()
+            const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
             self.g_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
+            grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
             self.optimizer_G.step()
-        return const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss  
+
+        # 可以選擇性地監控梯度範數
+        # print(f"判別器梯度範數：{grad_norm_d}")
+        # print(f"生成器梯度範數：{grad_norm_g}")
+
+        return const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss
 
     def update_lr(self):
         self.scheduler_G.step()
