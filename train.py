@@ -69,7 +69,6 @@ def train(args):
         gpu_ids=args.gpu_ids,
         self_attention=args.self_attention,
         residual_block=args.residual_block,
-        final_channels=args.final_channels,
         epoch=args.epoch,
         g_blur=args.g_blur,
         d_blur=args.d_blur,
@@ -157,7 +156,6 @@ if __name__ == '__main__':
                         help='number of input images channels')
     parser.add_argument('--self_attention', action='store_true')
     parser.add_argument('--residual_block', action='store_true')
-    parser.add_argument('--final_channels', type=int, default=1, help="discriminator final channels")
     parser.add_argument('--g_blur', action='store_true')
     parser.add_argument('--d_blur', action='store_true')
     parser.add_argument("--use_autocast", action="store_true", help="Enable autocast for mixed precision training")

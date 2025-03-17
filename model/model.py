@@ -174,10 +174,9 @@ class UNetGenerator(nn.Module):
         return encoded_real_A
 
 class Discriminator(nn.Module):
-    def __init__(self, input_nc=1, embedding_num=40, ndf=64, norm_layer=nn.BatchNorm2d, 
-                 final_channels=1, blur=False):
+    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, blur=False):
         super(Discriminator, self).__init__()
-
+        
         use_bias = norm_layer != nn.BatchNorm2d
         kw = 5
         padw = 2
@@ -198,30 +197,30 @@ class Discriminator(nn.Module):
             ]
 
         sequence += [
-            nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, final_channels, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
-            norm_layer(final_channels),
+            nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
+            norm_layer(ndf * nf_mult),
             nn.LeakyReLU(0.2, True)
         ]
-
+        
         self.model = nn.Sequential(*sequence)
-        self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))  # 確保最終輸出是 (batch_size, C, 1, 1)
+        self.global_pool = nn.AdaptiveAvgPool2d((4, 4))  # 自適應池化
+        final_features = ndf * nf_mult * 4 * 4
+        
+        self.binary = nn.Linear(final_features, 1)
+        self.category = nn.Linear(final_features, embedding_num)
+        
         self.blur = blur
-        self.gaussian_blur = T.GaussianBlur(kernel_size=1, sigma=1.0)  # 設定模糊程度
-        self.embedding_num = embedding_num
+        if blur:
+            self.gaussian_blur = T.GaussianBlur(kernel_size=3, sigma=1.0)
 
     def forward(self, input):
-        features = self.model(input)
         if self.blur:
-            features = self.gaussian_blur(features)
-
-        features = self.global_avg_pool(features)
-        features = features.view(features.shape[0], -1)
-
-        final_features = features.shape[1]
-        if not hasattr(self, "binary") or not hasattr(self, "category"):
-            self.binary = nn.Linear(final_features, 1).to(features.device)
-            self.category = nn.Linear(final_features, self.embedding_num).to(features.device)
-
+            input = self.gaussian_blur(input)
+        
+        features = self.model(input)
+        features = self.global_pool(features)
+        features = features.view(input.shape[0], -1)  # 展平成 batch x final_features
+        
         binary_logits = self.binary(features)
         category_logits = self.category(features)
         return binary_logits, category_logits
@@ -275,7 +274,7 @@ class Zi2ZiModel:
                  Lconst_penalty=10, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  self_attention=False, residual_block=False, 
-                 weight_decay = 1e-5, final_channels=1, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
+                 weight_decay = 1e-5, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
                  gradient_clip=0.5, norm_type="instance"):
 
         self.norm_type = norm_type  # 保存 norm_type
@@ -308,7 +307,6 @@ class Zi2ZiModel:
         self.is_training = is_training
         self.self_attention=self_attention
         self.residual_block=residual_block
-        self.final_channels = final_channels
         self.g_blur = g_blur
         self.d_blur = d_blur
 
@@ -339,7 +337,6 @@ class Zi2ZiModel:
             input_nc=2 * self.input_nc,
             embedding_num=self.embedding_num,
             ndf=self.ndf,
-            final_channels=self.final_channels,
             blur=self.d_blur,
             norm_layer=nn.BatchNorm2d
         )
