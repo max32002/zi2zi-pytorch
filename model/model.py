@@ -19,6 +19,15 @@ from torchvision.models import VGG16_Weights
 
 from utils.init_net import init_net
 
+def get_unicode_codepoint(char):
+    if len(char) == 1:
+        return ord(char)
+    elif len(char) == 2:
+        high_surrogate = ord(char[0])
+        low_surrogate = ord(char[1])
+        return 0x10000 + (high_surrogate - 0xD800) * 0x400 + (low_surrogate - 0xDC00)
+    else:
+        raise ValueError("Input must be a single Unicode character or a surrogate pair.")
 
 class ResSkip(nn.Module):
     def __init__(self, channels):
@@ -650,9 +659,9 @@ class Zi2ZiModel:
                     if filename_mode == "char":
                         filename = src_char_list[i]
                     elif filename_mode == "unicode_hex":
-                        filename = hex(ord(src_char_list[i]))[2:]
+                        filename = hex(get_unicode_codepoint(src_char_list[i]))[2:]
                     elif filename_mode == "unicode_int":
-                        filename = str(ord(src_char_list[i]))
+                        filename = str(get_unicode_codepoint(src_char_list[i]))
                 else:
                     filename = str(i)  # 如果 src_char_list 不存在或長度不夠，使用序列號
 
@@ -660,3 +669,4 @@ class Zi2ZiModel:
                 processed_image = self.process_image(opencv_image, crop_src_font, canvas_size, resize_canvas_size,
                                                     anti_aliasing_strength, binary_image)
                 self.save_image_to_disk(processed_image, label_dir, filename, image_ext)
+
