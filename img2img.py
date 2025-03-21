@@ -19,49 +19,58 @@ from tqdm import tqdm
 from utils.charset_util import processGlyphNames
 
 
-def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
-    img = Image.new("L", (canvas_size * 2, canvas_size * 2), 0)
-    draw = ImageDraw.Draw(img)
-    try:
-        draw.text((10, 10), ch, 255, font=font)
-    except OSError:
-        return None
-    bbox = img.getbbox()
-    if bbox is None:
-        return None
-    l, u, r, d = bbox
-    l = max(0, l - 5)
-    u = max(0, u - 5)
-    r = min(canvas_size * 2 - 1, r + 5)
-    d = min(canvas_size * 2 - 1, d + 5)
-    if l >= r or u >= d:
-        return None
-    img = np.array(img)
-    img = img[u:d, l:r]
-    img = 255 - img
-    img = Image.fromarray(img)
-    # img.show()
-    width, height = img.size
-    # Convert PIL.Image to FloatTensor, scale from 0 to 1, 0 = black, 1 = white
-    try:
-        img = transforms.ToTensor()(img)
-    except SystemError:
-        return None
-    img = img.unsqueeze(0)  # 加轴
-    pad_len = int(abs(width - height) / 2)  # 预填充区域的大小
-    # 需要填充区域，如果宽大于高则上下填充，否则左右填充
-    if width > height:
-        fill_area = (0, 0, pad_len, pad_len)
-    else:
-        fill_area = (pad_len, pad_len, 0, 0)
-    # 填充像素常值
-    fill_value = 1
-    img = nn.ConstantPad2d(fill_area, fill_value)(img)
-    # img = nn.ZeroPad2d(m)(img) #直接填0
-    img = img.squeeze(0)  # 去轴
-    img = transforms.ToPILImage()(img)
+def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0, auto_fit=True):
+    img = None
+    if auto_fit:
+        img = Image.new("L", (canvas_size * 2, canvas_size * 2), 0)
+        draw = ImageDraw.Draw(img)
+        try:
+            draw.text((x_offset, y_offset), ch, 255, font=font)
+        except OSError:
+            return None
 
-    img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
+        bbox = img.getbbox()
+        if bbox is None:
+            return None
+        l, u, r, d = bbox
+        l = max(0, l - 5)
+        u = max(0, u - 5)
+        r = min(canvas_size * 2 - 1, r + 5)
+        d = min(canvas_size * 2 - 1, d + 5)
+        if l >= r or u >= d:
+            return None
+        img = np.array(img)
+        img = img[u:d, l:r]
+        img = 255 - img
+        img = Image.fromarray(img)
+        # img.show()
+        width, height = img.size
+        # Convert PIL.Image to FloatTensor, scale from 0 to 1, 0 = black, 1 = white
+        try:
+            img = transforms.ToTensor()(img)
+        except SystemError:
+            return None
+        img = img.unsqueeze(0)  # 加轴
+        pad_len = int(abs(width - height) / 2)  # 预填充区域的大小
+        # 需要填充区域，如果宽大于高则上下填充，否则左右填充
+        if width > height:
+            fill_area = (0, 0, pad_len, pad_len)
+        else:
+            fill_area = (pad_len, pad_len, 0, 0)
+        # 填充像素常值
+        fill_value = 1
+        img = nn.ConstantPad2d(fill_area, fill_value)(img)
+        # img = nn.ZeroPad2d(m)(img) #直接填0
+        img = img.squeeze(0)  # 去轴
+        img = transforms.ToPILImage()(img)
+
+        img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
+    else:
+        img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        draw.text((0 + x_offset, 0 + y_offset), ch, (0, 0, 0), font=font)
+        img = img.convert('L')
+
     return img
 
 def convert_to_gray_binary(example_img, ksize=1, threshold=127):
@@ -78,9 +87,8 @@ def convert_to_gray_binary(example_img, ksize=1, threshold=127):
     example_img = cv2.cvtColor(example_img, cv2.COLOR_BGR2GRAY)
     return example_img
 
-def draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes, reverse):
-    dst_img = draw_single_char(ch, dst_font, canvas_size, x_offset, y_offset)
-    # check the filter example in the hashes or not
+def draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, dst_x_offset, dst_y_offset, filter_hashes, reverse, auto_fit=True, filename_with_label=True, filename_rule="seq"):
+    dst_img = draw_single_char(ch, dst_font, canvas_size, dst_x_offset, dst_y_offset, auto_fit=auto_fit)
     if dst_img is None:
         print("draw fail at char: %s" % (ch))
         return None
@@ -89,9 +97,9 @@ def draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset,
     if dst_hash in filter_hashes:
         return None
 
-    filename_mode = "unicode_int"
+    filename_rule = "unicode_int"
     image_filename = ""
-    if filename_mode == "unicode_int":
+    if filename_rule == "unicode_int":
         image_filename = str(ord(ch))
 
     src_img = None
@@ -138,7 +146,7 @@ def filter_recurring_hash(charset, font, canvas_size, x_offset, y_offset):
 
 
 def checkpoint2font(src_infer, dst, charset, char_size, canvas_size,
-             x_offset, y_offset, sample_count, sample_dir, label=0, filter_by_hash=True, reverse=False):
+             x_offset, y_offset, sample_dir, label=0, filter_by_hash=True, reverse=False, auto_fit=True, filename_with_label=True, filename_rule="seq"):
     dst_font = ImageFont.truetype(dst, size=char_size)
 
     filter_hashes = set()
@@ -149,9 +157,7 @@ def checkpoint2font(src_infer, dst, charset, char_size, canvas_size,
     count = 0
 
     for ch in charset:
-        if count == sample_count:
-            break
-        e = draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes, reverse)
+        e = draw_checkpoint2font_example(ch, src_infer, dst_font, canvas_size, x_offset, y_offset, filter_hashes, reverse, auto_fit=auto_fit)
         if not e is None:        
             target_path = os.path.join(sample_dir, "%d_%05d.png" % (label, count))
             #e.save(target_path)
@@ -161,32 +167,15 @@ def checkpoint2font(src_infer, dst, charset, char_size, canvas_size,
             if count % 500 == 0:
                 print("processed %d chars" % count)
 
+def img2img(args):
+    auto_fit = True
+    if args.disable_auto_fit:
+        auto_fit = False
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--mode', type=str, choices=['checkpoint2font'], required=True,
-                    help='generate mode.\n'
-                         'use --src_checkpoint_folder and --dst_font for checkpoint2font mode.\n'
-                    )
-parser.add_argument('--src_infer', type=str, default=None, help='path of the source infer image path')
-parser.add_argument('--src_imgs', type=str, default=None, help='path of the source imgs')
-parser.add_argument('--dst_font', type=str, default=None, help='path of the target font')
-parser.add_argument('--dst_imgs', type=str, default=None, help='path of the target imgs')
+    filename_with_label = True
+    if args.disable_filename_label:
+        filename_with_label = False
 
-parser.add_argument('--filter', default=False, action='store_true', help='filter recurring characters')
-parser.add_argument('--charset', type=str, help='charset, a one line file.')
-parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle a charset before processings')
-parser.add_argument('--char_size', type=int, default=256, help='character size')
-parser.add_argument('--canvas_size', type=int, default=256, help='canvas size')
-parser.add_argument('--x_offset', type=int, default=0, help='x offset')
-parser.add_argument('--y_offset', type=int, default=0, help='y_offset')
-parser.add_argument('--sample_count', type=int, default=5000, help='number of characters to draw')
-parser.add_argument('--sample_dir', type=str, default='sample_dir', help='directory to save examples')
-parser.add_argument('--label', type=int, default=0, help='label as the prefix of examples')
-parser.add_argument('--reverse', action='store_true', help='reverse source and target in image position')
-
-args = parser.parse_args()
-
-if __name__ == "__main__":
     input_img_path = os.path.abspath(args.src_infer)
 
     if not os.path.isdir(args.sample_dir):
@@ -203,7 +192,6 @@ if __name__ == "__main__":
             target_folder_list = os.listdir(input_img_path)
             for item in target_folder_list:
                 if item.endswith(".png"):
-                    #print("image file name", item)
                     char_string = item.replace(".png","")
                     charset.append(chr(int(char_string)))
 
@@ -213,7 +201,35 @@ if __name__ == "__main__":
         if args.reverse:
             reverse = True
         checkpoint2font(args.src_infer, args.dst_font, charset, args.char_size,
-                  args.canvas_size, args.x_offset, args.y_offset,
-                  args.sample_count, args.sample_dir, args.label, args.filter, reverse)
+                  args.canvas_size, args.dst_x_offset, args.dst_y_offset,
+                  args.sample_dir, args.label, args.filter, reverse, auto_fit=auto_fit, filename_with_label=filename_with_label, filename_rule=args.filename_rule)
     else:
         raise ValueError('mode should be font2font, font2imgs or imgs2imgs')
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', type=str, choices=['checkpoint2font'], required=True,
+                        help='generate mode.\n'
+                             'use --src_checkpoint_folder and --dst_font for checkpoint2font mode.\n'
+                        )
+    
+    parser.add_argument('--canvas_size', type=int, default=256, help='canvas size')
+    parser.add_argument('--char_size', type=int, default=256, help='character size')
+    parser.add_argument('--charset', type=str, help='charset, a one line file.')
+    parser.add_argument('--disable_auto_fit', action='store_true', help='disable image auto fit')
+    parser.add_argument('--disable_filename_label', action='store_true', help='disable image filename with label')
+    parser.add_argument('--dst_font', type=str, default=None, help='path of the target font')
+    parser.add_argument('--dst_x_offset', type=int, default=0, help='x offset')
+    parser.add_argument('--dst_y_offset', type=int, default=0, help='y_offset')
+    parser.add_argument('--filename_rule', type=str, default="seq", choices=['seq', 'char', 'unicode_int', 'unicode_hex'])
+    parser.add_argument('--filter', default=False, action='store_true', help='filter recurring characters')
+    parser.add_argument('--label', type=int, default=0, help='label as the prefix of examples')
+    parser.add_argument('--reverse', action='store_true', help='reverse source and target in image position')
+    parser.add_argument('--sample_dir', type=str, default='sample_dir', help='directory to save examples')
+    parser.add_argument('--shuffle', default=False, action='store_true', help='shuffle a charset before processings')
+    parser.add_argument('--src_imgs', type=str, default=None, help='path of the source imgs')
+    parser.add_argument('--src_infer', type=str, default=None, help='path of the source infer image path')
+
+    args = parser.parse_args()
+
+    img2img(args)
