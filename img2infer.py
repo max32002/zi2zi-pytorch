@@ -105,7 +105,7 @@ def infer(args):
             model.sample(
                 batch, infer_dir, src_char_list=current_round_text, crop_src_font=args.crop_src_font,
                 canvas_size=args.canvas_size, resize_canvas_size=args.resize_canvas_size,
-                filename_mode=args.filename_rule, binary_image=True, anti_aliasing_strength=args.anti_alias,
+                filename_rule=args.filename_rule, binary_image=True, anti_aliasing_strength=args.anti_alias,
                 image_ext=args.image_ext
             )
 

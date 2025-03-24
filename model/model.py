@@ -642,7 +642,7 @@ class Zi2ZiModel:
             cv2.imwrite(save_path, image)
 
     def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256,
-               filename_mode="seq", binary_image=True, anti_aliasing_strength=1, image_ext="png"):
+               filename_rule="seq", binary_image=True, anti_aliasing_strength=1, image_ext="png"):
         """生成並儲存圖像樣本"""
         with torch.no_grad():
             self.set_input(batch[0], batch[2], batch[1])
@@ -653,14 +653,14 @@ class Zi2ZiModel:
                 label_dir = os.path.join(basename, str(label.item()))
                 os.makedirs(label_dir, exist_ok=True)  # 確保目錄存在
 
-                if filename_mode == "seq":
+                if filename_rule == "seq":
                     filename = str(i)
                 elif src_char_list and i < len(src_char_list):
-                    if filename_mode == "char":
+                    if filename_rule == "char":
                         filename = src_char_list[i]
-                    elif filename_mode == "unicode_hex":
+                    elif filename_rule == "unicode_hex":
                         filename = hex(get_unicode_codepoint(src_char_list[i]))[2:]
-                    elif filename_mode == "unicode_int":
+                    elif filename_rule == "unicode_int":
                         filename = str(get_unicode_codepoint(src_char_list[i]))
                 else:
                     filename = str(i)  # 如果 src_char_list 不存在或長度不夠，使用序列號

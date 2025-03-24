@@ -40,12 +40,12 @@ def load_char_list(filepath):
     with open(filepath, 'r', encoding='utf-8') as file:
         return ''.join(line.strip() for line in file)
 
-def create_dataloader(char_list, label, canvas_size, font, x_offset, y_offset, skip_exist, infer_dir, image_ext, filename_mode, ignore_int_array):
+def create_dataloader(char_list, label, canvas_size, font, x_offset, y_offset, skip_exist, infer_dir, image_ext, filename_rule, ignore_int_array):
     """建立 DataLoader"""
     image_tensors, valid_chars = [], []
     label_list = []
     for char in char_list:
-        image_filename = str(ord(char)) if filename_mode == "unicode_int" else ""
+        image_filename = str(ord(char)) if filename_rule == "unicode_int" else ""
         save_path = os.path.join(infer_dir, image_filename + '.' + image_ext) if image_filename else ""
         if skip_exist and os.path.exists(save_path):
             continue
@@ -86,7 +86,7 @@ def infer(args):
 
     char_list = args.src_txt if args.src_txt else load_char_list(args.src_txt_file)
     font = ImageFont.truetype(args.src_font, size=args.char_size)
-    filename_mode = args.filename_rule
+    filename_rule = args.filename_rule
     ignore_int_array = [8, 10, 12, 32, 160, 4447, 8194]
     each_loop_length = args.each_loop_length
     total_rounds = (len(char_list) + each_loop_length - 1) // each_loop_length
@@ -98,7 +98,7 @@ def infer(args):
         print(f"Current round: {current_round + 1}/{total_rounds}")
         dataloader, valid_chars = create_dataloader(
             round_chars, args.label, args.canvas_size, font, args.src_font_x_offset, args.src_font_y_offset,
-            args.skip_exist, os.path.join(infer_dir, str(args.label)), args.image_ext, filename_mode, ignore_int_array
+            args.skip_exist, os.path.join(infer_dir, str(args.label)), args.image_ext, filename_rule, ignore_int_array
         )
         if not dataloader:
             print("Image list is empty, skip this round")
@@ -106,7 +106,7 @@ def infer(args):
         model.sample(
             next(iter(dataloader)), infer_dir, src_char_list=valid_chars, crop_src_font=args.crop_src_font,
             canvas_size=args.canvas_size, resize_canvas_size=args.resize_canvas_size,
-            filename_mode=args.filename_rule, binary_image=True, anti_aliasing_strength=args.anti_alias,
+            filename_rule=args.filename_rule, binary_image=True, anti_aliasing_strength=args.anti_alias,
             image_ext=args.image_ext
         )
     t_finish = time.time()
