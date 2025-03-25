@@ -104,7 +104,7 @@ def infer(args):
         for batch in dataloader:
             model.sample(
                 batch, infer_dir, src_char_list=current_round_text, crop_src_font=args.crop_src_font,
-                canvas_size=args.canvas_size, resize_canvas_size=args.resize_canvas_size,
+                canvas_size=args.canvas_size, resize_canvas=args.resize_canvas,
                 filename_rule=args.filename_rule, binary_image=True, anti_aliasing_strength=args.anti_alias,
                 image_ext=args.image_ext
             )
@@ -134,7 +134,7 @@ if __name__ == '__main__':
     parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
     parser.add_argument('--residual_block', action='store_true')
-    parser.add_argument('--resize_canvas_size', type=int, default=0)
+    parser.add_argument('--resize_canvas', type=int, default=0)
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
     parser.add_argument('--self_attention', action='store_true')
     parser.add_argument('--src_infer', type=str, default='experiments/infer/0')

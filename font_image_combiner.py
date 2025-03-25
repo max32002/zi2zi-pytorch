@@ -15,16 +15,15 @@ from tqdm import tqdm
 
 def draw_character(char, font, canvas_size, x_offset=0, y_offset=0, auto_fit=True):
     """渲染單個字元到圖像。"""
+    img = None
     if auto_fit:
         img = Image.new("L", (canvas_size * 2, canvas_size * 2), 0)
         draw = ImageDraw.Draw(img)
-        try:
-            draw.text((x_offset, y_offset), char, 255, font=font)
-        except OSError:
-            return None
+        draw.text((x_offset, y_offset), char, 255, font=font)
 
         bbox = img.getbbox()
         if bbox is None:
+            print(f"警告：字型 '{font.path}' 中缺少字元 '{char}' 的 glyph。")
             return None
         l, u, r, d = bbox
         l = max(0, l - 5)
@@ -32,6 +31,7 @@ def draw_character(char, font, canvas_size, x_offset=0, y_offset=0, auto_fit=Tru
         r = min(canvas_size * 2 - 1, r + 5)
         d = min(canvas_size * 2 - 1, d + 5)
         if l >= r or u >= d:
+            print(f"警告：字型 '{font.path}' 中缺少字元 '{char}' 的 glyph。")
             return None
         img = np.array(img)
         img = img[u:d, l:r]
@@ -42,7 +42,8 @@ def draw_character(char, font, canvas_size, x_offset=0, y_offset=0, auto_fit=Tru
         # Convert PIL.Image to FloatTensor, scale from 0 to 1, 0 = black, 1 = white
         try:
             img = transforms.ToTensor()(img)
-        except SystemError:
+        except Exception as e:
+            print(f"Error ToTensor: {e}")
             return None
         img = img.unsqueeze(0)  # 加轴
         pad_len = int(abs(width - height) / 2)  # 预填充区域的大小
@@ -54,10 +55,8 @@ def draw_character(char, font, canvas_size, x_offset=0, y_offset=0, auto_fit=Tru
         # 填充像素常值
         fill_value = 1
         img = nn.ConstantPad2d(fill_area, fill_value)(img)
-        # img = nn.ZeroPad2d(m)(img) #直接填0
-        img = img.squeeze(0)  # 去轴
+        img = img.squeeze(0)
         img = transforms.ToPILImage()(img)
-
         img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
     else:
         img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
@@ -65,7 +64,6 @@ def draw_character(char, font, canvas_size, x_offset=0, y_offset=0, auto_fit=Tru
         draw.text((0 + x_offset, 0 + y_offset), char, (0, 0, 0), font=font)
         img = img.convert('L')
     return img
-
 
 def convert_to_gray_binary(image, kernel_size=1, threshold=127):
     """將圖像轉換為灰階二值圖像。"""

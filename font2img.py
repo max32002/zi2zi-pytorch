@@ -18,18 +18,17 @@ from tqdm import tqdm
 
 from utils.charset_util import processGlyphNames
 
-def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0, auto_fit=True):
+def draw_character(char, font, canvas_size, x_offset=0, y_offset=0, auto_fit=True):
+    """渲染單個字元到圖像。"""
     img = None
     if auto_fit:
         img = Image.new("L", (canvas_size * 2, canvas_size * 2), 0)
         draw = ImageDraw.Draw(img)
-        try:
-            draw.text((x_offset, y_offset), ch, 255, font=font)
-        except OSError:
-            return None
+        draw.text((x_offset, y_offset), char, 255, font=font)
 
         bbox = img.getbbox()
         if bbox is None:
+            print(f"警告：字型 '{font.path}' 中缺少字元 '{char}' 的 glyph。")
             return None
         l, u, r, d = bbox
         l = max(0, l - 5)
@@ -37,6 +36,7 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0, auto_fit=Tru
         r = min(canvas_size * 2 - 1, r + 5)
         d = min(canvas_size * 2 - 1, d + 5)
         if l >= r or u >= d:
+            print(f"警告：字型 '{font.path}' 中缺少字元 '{char}' 的 glyph。")
             return None
         img = np.array(img)
         img = img[u:d, l:r]
@@ -47,7 +47,8 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0, auto_fit=Tru
         # Convert PIL.Image to FloatTensor, scale from 0 to 1, 0 = black, 1 = white
         try:
             img = transforms.ToTensor()(img)
-        except SystemError:
+        except Exception as e:
+            print(f"Error ToTensor: {e}")
             return None
         img = img.unsqueeze(0)  # 加轴
         pad_len = int(abs(width - height) / 2)  # 预填充区域的大小
@@ -59,17 +60,14 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0, auto_fit=Tru
         # 填充像素常值
         fill_value = 1
         img = nn.ConstantPad2d(fill_area, fill_value)(img)
-        # img = nn.ZeroPad2d(m)(img) #直接填0
-        img = img.squeeze(0)  # 去轴
+        img = img.squeeze(0)
         img = transforms.ToPILImage()(img)
-
         img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
     else:
         img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
         draw = ImageDraw.Draw(img)
-        draw.text((0 + x_offset, 0 + y_offset), ch, (0, 0, 0), font=font)
+        draw.text((0 + x_offset, 0 + y_offset), char, (0, 0, 0), font=font)
         img = img.convert('L')
-
     return img
 
 def convert_to_gray_binary(example_img, ksize=1, threshold=127):
@@ -87,18 +85,17 @@ def convert_to_gray_binary(example_img, ksize=1, threshold=127):
     return example_img
 
 def draw_font2font_example(ch, src_font, dst_font, canvas_size, src_x_offset, src_y_offset, dst_x_offset, dst_y_offset, filter_hashes, auto_fit=True):
-    dst_img = draw_single_char(ch, dst_font, canvas_size, dst_x_offset, dst_y_offset, auto_fit=auto_fit)
-    # check the filter example in the hashes or not
-    if dst_img is None:
-        print("draw fail at char: %s" % (ch))
+    target_image = draw_character(char, target_font, canvas_size, target_x_offset, target_y_offset, auto_fit=auto_fit)
+    if target_image is None:
+        print(f"渲染字元失敗：{char}")
         return None
 
-    dst_hash = hash(dst_img.tobytes())
+    dst_hash = hash(target_image.tobytes())
     if dst_hash in filter_hashes:
         return None
     src_img = draw_single_char(ch, src_font, canvas_size, src_x_offset, src_y_offset, auto_fit=auto_fit)
     example_img = Image.new("RGB", (canvas_size * 2, canvas_size), (255, 255, 255))
-    example_img.paste(dst_img, (0, 0))
+    example_img.paste(target_image, (0, 0))
     example_img.paste(src_img, (canvas_size, 0))
     example_img = convert_to_gray_binary(example_img, 1, 127)
     return example_img

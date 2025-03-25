@@ -614,12 +614,12 @@ class Zi2ZiModel:
         blurred = cv2.GaussianBlur(image, (ksize, ksize), 0)
         return blurred
 
-    def process_image(self, image, crop_src_font, canvas_size, resize_canvas_size, anti_aliasing_strength, binary_image):
+    def process_image(self, image, crop_src_font, canvas_size, resize_canvas, anti_aliasing_strength, binary_image):
         """處理圖像：裁剪、縮放、抗鋸齒、二值化"""
         if crop_src_font:
             image = image[0:canvas_size, 0:canvas_size]
-            if resize_canvas_size > 0 and canvas_size != resize_canvas_size:
-                image = cv2.resize(image, (resize_canvas_size, resize_canvas_size), interpolation=cv2.INTER_LANCZOS4)
+            if resize_canvas > 0 and canvas_size != resize_canvas:
+                image = cv2.resize(image, (resize_canvas, resize_canvas), interpolation=cv2.INTER_LANCZOS4)
             else:
                 image = cv2.resize(image, (canvas_size * 2, canvas_size * 2), interpolation=cv2.INTER_CUBIC)
                 image = self.anti_aliasing(image, 1)
@@ -641,7 +641,7 @@ class Zi2ZiModel:
         else:
             cv2.imwrite(save_path, image)
 
-    def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas_size=256,
+    def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas=256,
                filename_rule="seq", binary_image=True, anti_aliasing_strength=1, image_ext="png"):
         """生成並儲存圖像樣本"""
         with torch.no_grad():
@@ -666,7 +666,7 @@ class Zi2ZiModel:
                     filename = str(i)  # 如果 src_char_list 不存在或長度不夠，使用序列號
 
                 opencv_image = cv2.cvtColor(self.save_image(image_tensor), cv2.COLOR_BGR2GRAY)
-                processed_image = self.process_image(opencv_image, crop_src_font, canvas_size, resize_canvas_size,
+                processed_image = self.process_image(opencv_image, crop_src_font, canvas_size, resize_canvas,
                                                     anti_aliasing_strength, binary_image)
                 self.save_image_to_disk(processed_image, label_dir, filename, image_ext)
 
