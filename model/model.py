@@ -19,6 +19,7 @@ from torchvision.models import VGG16_Weights
 
 from utils.init_net import init_net
 
+
 def get_unicode_codepoint(char):
     if len(char) == 1:
         return ord(char)

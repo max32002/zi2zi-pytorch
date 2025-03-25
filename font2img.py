@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from utils.charset_util import processGlyphNames
 
+
 def draw_character(char, font, canvas_size, x_offset=0, y_offset=0, auto_fit=True):
     """渲染單個字元到圖像。"""
     img = None
@@ -84,7 +85,7 @@ def convert_to_gray_binary(example_img, ksize=1, threshold=127):
     example_img = cv2.cvtColor(example_img, cv2.COLOR_BGR2GRAY)
     return example_img
 
-def draw_font2font_example(ch, src_font, dst_font, canvas_size, src_x_offset, src_y_offset, dst_x_offset, dst_y_offset, filter_hashes, auto_fit=True):
+def draw_font2font_example(char, src_font, dst_font, canvas_size, src_x_offset, src_y_offset, dst_x_offset, dst_y_offset, filter_hashes, auto_fit=True):
     target_image = draw_character(char, target_font, canvas_size, target_x_offset, target_y_offset, auto_fit=auto_fit)
     if target_image is None:
         print(f"渲染字元失敗：{char}")
@@ -93,7 +94,7 @@ def draw_font2font_example(ch, src_font, dst_font, canvas_size, src_x_offset, sr
     dst_hash = hash(target_image.tobytes())
     if dst_hash in filter_hashes:
         return None
-    src_img = draw_single_char(ch, src_font, canvas_size, src_x_offset, src_y_offset, auto_fit=auto_fit)
+    src_img = draw_single_char(char, src_font, canvas_size, src_x_offset, src_y_offset, auto_fit=auto_fit)
     example_img = Image.new("RGB", (canvas_size * 2, canvas_size), (255, 255, 255))
     example_img.paste(target_image, (0, 0))
     example_img.paste(src_img, (canvas_size, 0))
@@ -101,8 +102,8 @@ def draw_font2font_example(ch, src_font, dst_font, canvas_size, src_x_offset, sr
     return example_img
 
 
-def draw_font2imgs_example(ch, src_font, canvas_size, x_offset, y_offset,auto_fit=True):
-    src_img = draw_single_char(ch, src_font, canvas_size, x_offset, y_offset, auto_fit=auto_fit)
+def draw_font2imgs_example(char, src_font, canvas_size, x_offset, y_offset,auto_fit=True):
+    src_img = draw_single_char(char, src_font, canvas_size, x_offset, y_offset, auto_fit=auto_fit)
     example_img = convert_to_gray_binary(src_img, 0, 127)
     return example_img
 
@@ -273,10 +274,6 @@ def font2imge(args):
                   args.sample_dir, auto_fit=auto_fit,
                   filename_with_label=filename_with_label, filename_rule=args.filename_rule,
                   enable_txt=args.enable_txt, caption_text=args.caption_text)
-    elif args.mode == 'imgs2imgs':
-        if args.src_imgs is None or args.dst_imgs is None:
-            raise ValueError('src_imgs and dst_imgs are required.')
-        imgs2imgs(args.src_imgs, args.dst_imgs, args.canvas_size, args.sample_dir)
     else:
         raise ValueError('mode should be font2font, font2imgs or imgs2imgs')
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 #encoding=utf-8
 import argparse
+import glob
 import math
 import os
 import random
@@ -16,7 +17,7 @@ from torchvision.utils import make_grid, save_image
 
 from data import DatasetFromObj
 from model import Zi2ZiModel
-import glob
+
 
 def ensure_dir(path):
     """確保目錄存在，不存在則建立"""
