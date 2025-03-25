@@ -86,7 +86,7 @@ def convert_to_gray_binary(example_img, ksize=1, threshold=127):
     return example_img
 
 def draw_font2font_example(char, src_font, dst_font, canvas_size, src_x_offset, src_y_offset, dst_x_offset, dst_y_offset, filter_hashes, auto_fit=True):
-    target_image = draw_character(char, target_font, canvas_size, target_x_offset, target_y_offset, auto_fit=auto_fit)
+    target_image = draw_character(char, dst_font, canvas_size, dst_x_offset, dst_y_offset, auto_fit=auto_fit)
     if target_image is None:
         print(f"渲染字元失敗：{char}")
         return None
@@ -94,7 +94,7 @@ def draw_font2font_example(char, src_font, dst_font, canvas_size, src_x_offset, 
     dst_hash = hash(target_image.tobytes())
     if dst_hash in filter_hashes:
         return None
-    src_img = draw_single_char(char, src_font, canvas_size, src_x_offset, src_y_offset, auto_fit=auto_fit)
+    src_img = draw_character(char, src_font, canvas_size, src_x_offset, src_y_offset, auto_fit=auto_fit)
     example_img = Image.new("RGB", (canvas_size * 2, canvas_size), (255, 255, 255))
     example_img.paste(target_image, (0, 0))
     example_img.paste(src_img, (canvas_size, 0))
@@ -103,7 +103,7 @@ def draw_font2font_example(char, src_font, dst_font, canvas_size, src_x_offset, 
 
 
 def draw_font2imgs_example(char, src_font, canvas_size, x_offset, y_offset,auto_fit=True):
-    src_img = draw_single_char(char, src_font, canvas_size, x_offset, y_offset, auto_fit=auto_fit)
+    src_img = draw_character(char, src_font, canvas_size, x_offset, y_offset, auto_fit=auto_fit)
     example_img = convert_to_gray_binary(src_img, 0, 127)
     return example_img
 
@@ -128,7 +128,7 @@ def filter_recurring_hash(charset, font, canvas_size, x_offset, y_offset):
     sample = _charset[:2000]
     hash_count = collections.defaultdict(int)
     for ch in sample:
-        img = draw_single_char(ch, font, canvas_size, x_offset, y_offset)
+        img = draw_character(ch, font, canvas_size, x_offset, y_offset)
         hash_count[hash(img.tobytes())] += 1
     recurring_hashes = filter(lambda d: d[1] > 2, hash_count.items())
     return [rh[0] for rh in recurring_hashes]
