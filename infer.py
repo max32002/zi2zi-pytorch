@@ -88,8 +88,8 @@ def infer(args):
     font = ImageFont.truetype(args.src_font, size=args.char_size)
     filename_rule = args.filename_rule
     ignore_int_array = [8, 10, 12, 32, 160, 4447, 8194]
-    each_loop_length = args.each_loop_length
-    total_rounds = (len(char_list) + each_loop_length - 1) // each_loop_length
+    each_loop_length = args.batch_size
+    total_rounds = (len(char_list) + args.batch_size - 1) // each_loop_length
     print(f"Total rounds: {total_rounds}")
 
     t0 = time.time()
@@ -120,7 +120,6 @@ if __name__ == '__main__':
     parser.add_argument('--char_size', type=int, default=256)
     parser.add_argument('--checkpoint_dir', type=str, default=None, help='overwrite checkpoint dir path')
     parser.add_argument('--crop_src_font', action='store_true')
-    parser.add_argument('--each_loop_length', type=int, default=32)
     parser.add_argument('--embedding_dim', type=int, default=64, help="dimension for embedding")
     parser.add_argument('--embedding_num', type=int, default=40, help="number for distinct embeddings")
     parser.add_argument('--experiment_dir', required=True, help='experiment directory, data, samples,checkpoints,etc')

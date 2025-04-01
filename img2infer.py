@@ -59,11 +59,10 @@ def infer(args):
             char_array.append(chr(int(char_string)))
     src_char_list = ''.join(char_array)
 
-    final_batch_size = args.batch_size
     total_length = 0
     total_length = len(src_char_list)
 
-    each_loop_length = args.each_loop_length
+    each_loop_length = args.batch_size
     total_round = int(total_length/each_loop_length) + 1
 
     if total_round > 1:
@@ -120,7 +119,6 @@ if __name__ == '__main__':
     parser.add_argument('--canvas_size', type=int, default=256)
     parser.add_argument('--checkpoint_dir', type=str, default=None, help='overwrite checkpoint dir path')
     parser.add_argument('--crop_src_font', action='store_true')
-    parser.add_argument('--each_loop_length', type=int, default=200)
     parser.add_argument('--embedding_dim', type=int, default=128, help="dimension for embedding")
     parser.add_argument('--embedding_num', type=int, default=40, help="number for distinct embeddings")
     parser.add_argument('--experiment_dir', required=True, help='experiment directory, data, samples,checkpoints,etc')
