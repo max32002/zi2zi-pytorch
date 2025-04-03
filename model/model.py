@@ -1,6 +1,7 @@
 import functools
 import math
 import os
+import sys
 import subprocess
 from typing import List, Union
 
@@ -19,16 +20,17 @@ from torchvision.models import VGG16_Weights
 
 from utils.init_net import init_net
 
-
 def get_unicode_codepoint(char):
-    if len(char) == 1:
+    if sys.maxunicode >= 0x10FFFF:
+        # 直接處理單一字元
         return ord(char)
-    elif len(char) == 2:
-        high_surrogate = ord(char[0])
-        low_surrogate = ord(char[1])
-        return 0x10000 + (high_surrogate - 0xD800) * 0x400 + (low_surrogate - 0xDC00)
     else:
-        raise ValueError("Input must be a single Unicode character or a surrogate pair.")
+        # 針對 UCS-2 需要特別處理代理對
+        if len(char) == 2:
+            high, low = map(ord, char)
+            return (high - 0xD800) * 0x400 + (low - 0xDC00) + 0x10000
+        else:
+            return ord(char)
 
 class ResSkip(nn.Module):
     def __init__(self, channels):
