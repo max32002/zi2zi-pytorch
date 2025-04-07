@@ -115,8 +115,8 @@ def train(args):
                 print(
                     f"Epoch: [{epoch:2d}], Batch: [{batch_id:4d}/{total_batches:4d}] "
                     f" | Time/Batch: {elapsed_batch_time:.2f}s | Total Time: {total_elapsed_time:.0f}\n"
-                    f" d_loss: {losses['d_loss']:.4f}, g_loss:  {losses['g_loss']:.4f}, cheat_loss: {losses['cheat_loss']:.4f}, "
-                    f"const_loss: {losses['const_loss']:.4f}, l1_loss: {losses['l1_loss']:.4f}, fm_loss: {losses['fm_loss']:.4f}, perceptual_loss: {losses['perceptual_loss']:.4f}"
+                    f" d_loss: {losses['d_loss']:.4f}, g_loss:  {losses['g_loss']:.4f}, "
+                    f"const_loss: {losses['const_loss']:.4f}, l1_loss: {losses['l1_loss']:.4f}, fm_loss: {losses['fm_loss']:.4f}, perc_loss: {losses['perceptual_loss']:.4f}"
                 )
 
             # --- Checkpointing ---

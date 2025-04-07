@@ -62,25 +62,25 @@ class ResSkip(nn.Module):
         return x + self.relu(self.norm(self.conv(x)))
 
 class TransformerBlock(nn.Module):
-    def __init__(self, channels, num_heads=4, dropout=0.1):
+    def __init__(self, channels, num_heads=4, dropout=0.1, eps=1e-5):
         super(TransformerBlock, self).__init__()
         self.attention = nn.MultiheadAttention(channels, num_heads, dropout=dropout, batch_first=True)
-        self.norm1 = nn.LayerNorm(channels)
+        self.norm1 = nn.LayerNorm(channels, eps=eps)
         self.ffn = nn.Sequential(
             nn.Linear(channels, channels * 4),
             nn.ReLU(),
             nn.Linear(channels * 4, channels)
         )
-        self.norm2 = nn.LayerNorm(channels)
+        self.norm2 = nn.LayerNorm(channels, eps=eps)
 
     def forward(self, x):
         B, C, H, W = x.shape
-        x_flat = x.permute(0, 2, 3, 1).reshape(B, H * W, C)  # [B, N, C]
+        x_flat = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
         attn_output, _ = self.attention(x_flat, x_flat, x_flat)
         x_flat = self.norm1(x_flat + attn_output)
         ffn_output = self.ffn(x_flat)
         x_flat = self.norm2(x_flat + ffn_output)
-        return x_flat.reshape(B, H, W, C).permute(0, 3, 1, 2)  # [B, C, H, W]
+        return x_flat.reshape(B, H, W, C).permute(0, 3, 1, 2)
 
 class LinearAttention(nn.Module):
     def __init__(self, channels, key_channels=None):
@@ -92,7 +92,7 @@ class LinearAttention(nn.Module):
         self.value = nn.Conv2d(channels, self.value_channels, kernel_size=1)
         self.out_proj = nn.Identity()
         self.gamma = nn.Parameter(torch.zeros(1))
-        self.feature_map = lambda x: F.elu(x) + 1.0
+        self.feature_map = lambda x: F.elu(x) + 1.0 # 確保輸出值大於0
 
     def forward(self, x):
         B, C, H, W = x.shape
@@ -107,7 +107,7 @@ class LinearAttention(nn.Module):
         z_norm_factor = k_mapped.sum(dim=-1, keepdim=True)
         qkv_aggregated = torch.bmm(q_mapped.transpose(-1,-2), kv_context)
         qz_normalization = torch.bmm(q_mapped.transpose(-1,-2), z_norm_factor)
-        normalized_out = (qkv_aggregated / (qz_normalization.clamp(min=1e-6))).transpose(-1,-2)
+        normalized_out = (qkv_aggregated / (qz_normalization.clamp(min=1e-6))).transpose(-1,-2) # 確保分母不為零
         out = normalized_out.view(B, self.value_channels, H, W)
         out = self.out_proj(out)
         return self.gamma * out + x
@@ -242,33 +242,36 @@ class UNetGenerator(nn.Module):
         _, encoded_real_A = self.model(x, style)
         return encoded_real_A
 
-class Discriminator(nn.Module):
+class Discriminator(nn.Module): 
     def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, blur=False):
         super(Discriminator, self).__init__()
 
         use_bias = norm_layer != nn.BatchNorm2d
-        kw = 5
-        padw = 2
-        sequence = [nn.utils.spectral_norm(nn.Conv2d(2, ndf, kernel_size=kw, stride=2, padding=padw)), # 將 input_nc 改為 2
-            nn.LeakyReLU(0.2, True)]
+        kw = 4
+        padw = 1
+        sequence = [
+            nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw)),
+            nn.LeakyReLU(0.2, True)
+        ]
+
         nf_mult = 1
-        for n in range(1, 3):
+        for n in range(1, 4):  # deeper layers
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
-            sequence += [nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
+            sequence += [
+                nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult,
+                                                 kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
                 norm_layer(ndf * nf_mult),
-                nn.LeakyReLU(0.2, True) ]
+                nn.LeakyReLU(0.2, True)
+            ]
 
-        sequence += [ nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
-            norm_layer(ndf * nf_mult),
-            nn.LeakyReLU(0.2, True) ]
-
+        # PatchGAN 的最後一層：1x1 conv => output 一張 (N,1,H,W) 真偽圖
         self.model = nn.Sequential(*sequence)
-        self.global_pool = nn.AdaptiveAvgPool2d((4, 4))  # 自適應池化
-        final_features = ndf * nf_mult * 4 * 4
+        self.output_conv = nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)
 
-        self.binary = nn.Linear(final_features, 1)
-        self.category = nn.Linear(final_features, embedding_num)
+        # 類別分類仍然可以做：用全域特徵 + 線性分類
+        self.category_pool = nn.AdaptiveAvgPool2d((4, 4))
+        self.category_fc = nn.Linear(ndf * nf_mult * 4 * 4, embedding_num)
 
         self.blur = blur
         if blur:
@@ -277,12 +280,14 @@ class Discriminator(nn.Module):
     def forward(self, input):
         if self.blur:
             input = self.gaussian_blur(input)
-        features = self.model(input)
-        features = self.global_pool(features)
-        features = features.view(input.shape[0], -1)
 
-        binary_logits = self.binary(features)
-        category_logits = self.category(features)
+        features = self.model(input)
+        binary_logits = self.output_conv(features)  # shape: (N, 1, H', W')，PatchGAN 判別圖
+
+        pooled = self.category_pool(features)
+        pooled = pooled.view(input.size(0), -1)
+        category_logits = self.category_fc(pooled)  # shape: (N, embedding_num)
+
         return binary_logits, category_logits
 
 class CategoryLoss(nn.Module):
@@ -341,11 +346,92 @@ class PerceptualLoss(nn.Module):
         )
         return loss
 
+class Zi2ZiLoss:
+    def __init__(self, model, device, lambda_L1=100, lambda_const=10, lambda_cat=1, lambda_fm=10, lambda_perc=10, lambda_gp=10):
+        self.model = model
+        self.device = device
+
+        # Loss functions
+        self.L1 = nn.L1Loss().to(device)
+        self.const = nn.MSELoss().to(device)
+        self.category = CategoryLoss(model.embedding_num).to(device)
+        self.perceptual = PerceptualLoss().to(device)
+        self.feature_match = nn.L1Loss().to(device)
+
+        # Weights
+        self.lambda_L1 = lambda_L1
+        self.lambda_const = lambda_const
+        self.lambda_cat = lambda_cat
+        self.lambda_fm = lambda_fm
+        self.lambda_perc = lambda_perc
+        self.lambda_gp = lambda_gp
+
+    def compute_gradient_penalty(self, real, fake):
+        alpha = torch.rand(real.size(0), 1, 1, 1, device=self.device)
+        interpolates = (alpha * real + (1 - alpha) * fake).requires_grad_(True)
+        d_interpolates, _ = self.model.netD(interpolates)
+        grad_outputs = torch.ones_like(d_interpolates)
+        gradients = torch.autograd.grad(
+            outputs=d_interpolates,
+            inputs=interpolates,
+            grad_outputs=grad_outputs,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True
+        )[0]
+        gradients = gradients.view(gradients.size(0), -1)
+        return ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+
+    def feature_matching_loss(self, real_AB, fake_AB):
+        real_feat = self.model.netD.model(real_AB)
+        fake_feat = self.model.netD.model(fake_AB)
+        return self.feature_match(fake_feat, real_feat.detach())
+
+    def backward_D(self, real_A, real_B, fake_B, labels):
+        real_AB = torch.cat([real_A, real_B], 1)
+        fake_AB = torch.cat([real_A, fake_B.detach()], 1)
+
+        real_D, real_cat = self.model.netD(real_AB)
+        fake_D, fake_cat = self.model.netD(fake_AB)
+
+        d_loss_adv = torch.mean(F.logsigmoid(real_D - fake_D) + F.logsigmoid(fake_D - real_D))
+        d_loss_adv = -d_loss_adv
+
+        cat_loss = (self.category(real_cat, labels) + self.category(fake_cat, labels)) * 0.5 * self.lambda_cat
+        gp = self.compute_gradient_penalty(real_AB, fake_AB) * self.lambda_gp
+
+        total_D_loss = d_loss_adv + cat_loss + gp
+        return total_D_loss, cat_loss
+
+    def backward_G(self, real_A, real_B, fake_B, encoded_real_A, encoded_fake_B, labels):
+        real_AB = torch.cat([real_A, real_B], 1)
+        fake_AB = torch.cat([real_A, fake_B], 1)
+
+        fake_D, fake_cat = self.model.netD(fake_AB)
+        real_D, _ = self.model.netD(real_AB)
+
+        g_loss_adv = -torch.mean(F.logsigmoid(fake_D - real_D))
+        const_loss = self.const(encoded_real_A, encoded_fake_B) * self.lambda_const
+        l1_loss = self.L1(fake_B, real_B) * self.lambda_L1
+        cat_loss = self.category(fake_cat, labels) * self.lambda_cat
+        fm_loss = self.feature_matching_loss(real_AB, fake_AB) * self.lambda_fm
+        perc_loss = self.perceptual(fake_B, real_B) * self.lambda_perc
+
+        total_G_loss = g_loss_adv + const_loss + l1_loss + cat_loss + fm_loss + perc_loss
+        return total_G_loss, {
+            'const_loss': const_loss,
+            'l1_loss': l1_loss,
+            'g_adv': g_loss_adv,
+            'cat_loss': cat_loss,
+            'fm_loss': fm_loss,
+            'perceptual_loss': perc_loss,
+        }
+
 class Zi2ZiModel:
     def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128, ngf=64, ndf=64,
                  Lconst_penalty=10, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
-                 self_attention=False, residual_block=False, 
+                 self_attention=False, residual_block=False,
                  weight_decay = 1e-5, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
                  gradient_clip=0.5, norm_type="instance"):
 
@@ -365,8 +451,7 @@ class Zi2ZiModel:
 
         self.save_dir = save_dir
         self.gpu_ids = gpu_ids
-        device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
-        self.device = device
+        self.device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
 
         self.input_nc = input_nc
         self.embedding_dim = embedding_dim
@@ -382,7 +467,6 @@ class Zi2ZiModel:
         self.g_blur = g_blur
         self.d_blur = d_blur
 
-        self.feature_matching_loss = nn.L1Loss()
         self.gradient_clip = gradient_clip
 
         self.setup()
@@ -419,18 +503,16 @@ class Zi2ZiModel:
 
         self.optimizer_G = torch.optim.AdamW(self.netG.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
         self.optimizer_D = torch.optim.AdamW(self.netD.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
-        
+
         eta_min = 1e-6
         self.scheduler_G = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_G, T_max=self.epoch, eta_min=eta_min)
         self.scheduler_D = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_D, T_max=self.epoch, eta_min=eta_min)
 
-        self.criterion_L1 = nn.L1Loss().to(self.device)
-        self.criterion_MSE = nn.MSELoss().to(self.device) # For const_loss
-        self.criterion_Category = CategoryLoss(self.embedding_num).to(self.device)
-        self.criterion_Perceptual = PerceptualLoss().to(self.device) # Assumes VGG normalization inside
-        self.criterion_FeatureMatch = nn.L1Loss().to(self.device) # For Feature Matching Loss
-
         self.set_train_eval_mode()
+        self.loss_module = Zi2ZiLoss(self, self.device,
+                                    lambda_L1=self.L1_penalty,
+                                    lambda_const=self.Lconst_penalty,
+                                    lambda_cat=self.Lcategory_penalty)
 
     def set_train_eval_mode(self):
         if self.is_training:
@@ -447,161 +529,71 @@ class Zi2ZiModel:
         self.real_A = data['A'].to(self.device) # Input font image
         self.real_B = data['B'].to(self.device) # Target font image
 
-    def set_input_b(self, labels, real_A, real_B):
-        if self.gpu_ids:
-            self.real_A = real_A.to(self.gpu_ids[0])
-            self.real_B = real_B.to(self.gpu_ids[0])
-            self.labels = labels.to(self.gpu_ids[0])
-        else:
-            self.real_A = real_A
-            self.real_B = real_B
-            self.labels = labels
-
     def forward(self):
         self.fake_B, self.encoded_real_A = self.netG(self.real_A, self.labels)
         self.encoded_fake_B = self.netG.encode(self.fake_B, self.labels)
 
-    def compute_feature_matching_loss(self, real_AB, fake_AB):
-        fm_loss = 0.0
-        real_fm = self.netD.model(torch.cat([self.real_A, self.real_B], 1))
-        fake_fm = self.netD.model(torch.cat([self.real_A, self.fake_B], 1))
-        fm_loss = self.criterion_FeatureMatch(fake_fm, real_fm.detach()) # Detach real features
-        return fm_loss * 10.0 # Add weight to FM loss (common practice)
-
-    def compute_gradient_penalty(self, real_samples, fake_samples):
-        alpha = torch.rand(real_samples.size(0), 1, 1, 1, device=self.device)
-        interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
-        interpolates_logits, _ = self.netD(interpolates)
-        grad_outputs = torch.ones(interpolates_logits.size(), device=self.device)
-        gradients = torch.autograd.grad(
-            outputs=interpolates_logits, 
-            inputs=interpolates, 
-            grad_outputs=grad_outputs,
-            create_graph=True,
-            retain_graph=True,
-            only_inputs=True,
-        )[0]
-        gradients = gradients.view(gradients.size(0), -1)
-        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
-        return gradient_penalty
-
-    def backward_D(self, no_target_source=False):
-        real_AB = torch.cat([self.real_A, self.real_B], 1)
-        fake_AB = torch.cat([self.real_A, self.fake_B.detach()], 1)
-
-        real_D_logits, real_category_logits = self.netD(real_AB)
-        fake_D_logits, fake_category_logits = self.netD(fake_AB)
-
-        real_category_loss = self.criterion_Category(real_category_logits, self.labels)
-        fake_category_loss = self.criterion_Category(fake_category_logits, self.labels)
-        category_loss = (real_category_loss + fake_category_loss) * self.Lcategory_penalty
-
-        d_loss = torch.mean(F.logsigmoid(real_D_logits - fake_D_logits) +
-                            F.logsigmoid(fake_D_logits - real_D_logits))
-
-        gp = self.compute_gradient_penalty(real_AB, fake_AB)
-
-        gradient_penalty_weight = 10.0
-        self.d_loss = - d_loss + category_loss / 2.0 + gradient_penalty_weight * gp
-
-        return category_loss
-
-    def backward_G(self, no_target_source=False):
-        fake_AB = torch.cat([self.real_A, self.fake_B], 1)
-        real_AB = torch.cat([self.real_A, self.real_B], 1)
-
-        fake_D_logits, fake_category_logits = self.netD(fake_AB)
-        real_D_logits, _ = self.netD(real_AB)
-
-        const_loss = self.Lconst_penalty * self.criterion_MSE(self.encoded_real_A, self.encoded_fake_B)
-        l1_loss = self.L1_penalty * self.criterion_L1(self.fake_B, self.real_B)
-        fake_category_loss = self.Lcategory_penalty * self.criterion_Category(fake_category_logits, self.labels)
-        g_loss_adv = -torch.mean(F.logsigmoid(fake_D_logits - real_D_logits))
-
-        fm_loss = self.compute_feature_matching_loss(real_AB, fake_AB)
-
-        self.g_loss = g_loss_adv + l1_loss + fake_category_loss + const_loss + fm_loss
-        
-        perceptual_loss = self.criterion_Perceptual(self.fake_B, self.real_B)
-        perceptual_weight = 10.0  # 感知損失的權重
-        self.g_loss += perceptual_weight * perceptual_loss
-
-        return const_loss, l1_loss, g_loss_adv, fm_loss, perceptual_loss
+    def set_requires_grad(self, nets, requires_grad=False):
+        if not isinstance(nets, list):
+            nets = [nets]
+        for net in nets:
+            if net is not None:
+                for param in net.parameters():
+                    param.requires_grad = requires_grad
 
     def optimize_parameters(self, use_autocast=False):
         self.forward()
+
+        # --- Discriminator ---
         self.set_requires_grad(self.netD, True)
         self.optimizer_D.zero_grad()
 
         if use_autocast:
             with torch.amp.autocast(device_type='cuda'):
-                category_loss = self.backward_D()
-                scaled_d_loss = self.scaler_D.scale(self.d_loss)
-                scaled_d_loss.backward()
+                d_loss, cat_loss_d = self.loss_module.backward_D(self.real_A, self.real_B, self.fake_B, self.labels)
+                self.scaler_D.scale(d_loss).backward()
                 self.scaler_D.unscale_(self.optimizer_D)
-                grad_norm_d = torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
+                torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
                 self.scaler_D.step(self.optimizer_D)
                 self.scaler_D.update()
         else:
-            category_loss = self.backward_D()
-            self.d_loss.backward()
-            grad_norm_d = torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
+            d_loss, cat_loss_d = self.loss_module.backward_D(self.real_A, self.real_B, self.fake_B, self.labels)
+            d_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
             self.optimizer_D.step()
 
-        # 檢查判別器損失是否為 NaN
-        if torch.isnan(self.d_loss):
+        if torch.isnan(d_loss):
             print("判別器損失為 NaN，停止訓練。")
-            return  # 或執行其他適當的錯誤處理
+            return
 
+        # --- Generator ---
         self.set_requires_grad(self.netD, False)
         self.optimizer_G.zero_grad()
-        const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = 0, 0, 0, 0, 0
 
         if use_autocast:
             with torch.amp.autocast(device_type='cuda'):
-                const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
-                scaled_g_loss = self.scaler_G.scale(self.g_loss)
-                scaled_g_loss.backward()
+                g_loss, losses = self.loss_module.backward_G(
+                    self.real_A, self.real_B, self.fake_B,
+                    self.encoded_real_A, self.encoded_fake_B, self.labels
+                )
+                self.scaler_G.scale(g_loss).backward()
                 self.scaler_G.unscale_(self.optimizer_G)
-                grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
+                torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
                 self.scaler_G.step(self.optimizer_G)
                 self.scaler_G.update()
         else:
-            const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
-            self.g_loss.backward()
-            grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
+            g_loss, losses = self.loss_module.backward_G(
+                self.real_A, self.real_B, self.fake_B,
+                self.encoded_real_A, self.encoded_fake_B, self.labels
+            )
+            g_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
             self.optimizer_G.step()
-
-        self.forward()
-        self.optimizer_G.zero_grad()
-
-        if use_autocast:
-            with torch.amp.autocast(device_type='cuda'):
-                const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
-                scaled_g_loss = self.scaler_G.scale(self.g_loss)
-                scaled_g_loss.backward()
-                self.scaler_G.unscale_(self.optimizer_G)
-                grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
-                self.scaler_G.step(self.optimizer_G)
-                self.scaler_G.update()
-        else:
-            const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
-            self.g_loss.backward()
-            grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
-            self.optimizer_G.step()
-
-        # 可以選擇性地監控梯度範數
-        # print(f"判別器梯度範數：{grad_norm_d}")
-        # print(f"生成器梯度範數：{grad_norm_g}")
 
         return {
-            'd_loss': self.d_loss.item(),
-            'g_loss': self.g_loss.item(),
-            'const_loss': const_loss.item(),
-            'l1_loss': l1_loss.item(),
-            'cheat_loss': cheat_loss.item(),
-            'fm_loss': fm_loss.item(),
-            'perceptual_loss': perceptual_loss.item()
+            'd_loss': d_loss.item(),
+            'g_loss': g_loss.item(),
+            **{k: v.item() for k, v in losses.items()}
         }
 
     def set_requires_grad(self, nets, requires_grad=False):
