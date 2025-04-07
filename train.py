@@ -112,14 +112,11 @@ def train(args):
             if batch_id % 100 == 0:
                 elapsed_batch_time = time.time() - current_step_time
                 total_elapsed_time = time.time() - start_time
-                # Use keys from the losses dictionary
                 print(
-                    f"Epoch: [{epoch:3d}/{args.epoch-1}], Batch: [{batch_id:4d}/{total_batches-1}] "
-                    f"Step: {global_steps} | Time/Batch: {elapsed_batch_time:.2f}s | Total Time: {total_elapsed_time:.0f}s\n"
-                    f"  Losses: D_Total={losses['D_total']:.4f}, G_Total={losses['G_total']:.4f}\n"
-                    f"    G: [Adv={losses['G_adv']:.4f}, Cat={losses['G_category']:.4f}, L1={losses['G_L1']:.4f}, "
-                    f"Const={losses['G_const']:.4f}, FM={losses['G_FM']:.4f}, Perc={losses['G_perceptual']:.4f}]\n"
-                    f"    D: [Adv={losses['D_adv']:.4f}, Cat={losses['D_category']:.4f}, GP={losses['D_gp']:.4f}]"
+                    f"Epoch: [{epoch:2d}], Batch: [{batch_id:4d}/{total_batches:4d}] "
+                    f" | Time/Batch: {elapsed_batch_time:.2f}s | Total Time: {total_elapsed_time:.0f}\n"
+                    f" d_loss: {losses['d_loss']:.4f}, g_loss:  {losses['g_loss']:.4f}, cheat_loss: {losses['cheat_loss']:.4f}, "
+                    f"const_loss: {losses['const_loss']:.4f}, l1_loss: {losses['l1_loss']:.4f}, fm_loss: {losses['fm_loss']:.4f}, perceptual_loss: {losses['perceptual_loss']:.4f}"
                 )
 
             # --- Checkpointing ---

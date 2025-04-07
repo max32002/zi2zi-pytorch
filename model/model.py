@@ -1,6 +1,7 @@
 import functools
 import math
 import os
+import sys
 import subprocess
 from typing import List, Union
 
@@ -39,32 +40,16 @@ class SelfAttention(nn.Module):
         return self.gamma * out + x
 
 def get_unicode_codepoint(char):
-    if len(char) == 1:
+    if sys.maxunicode >= 0x10FFFF:
+        # 直接處理單一字元
         return ord(char)
-    elif len(char) == 2:
-        high_surrogate = ord(char[0])
-        low_surrogate = ord(char[1])
-        return 0x10000 + (high_surrogate - 0xD800) * 0x400 + (low_surrogate - 0xDC00)
     else:
-        raise ValueError("Input must be a single Unicode character or a surrogate pair.")
-
-class StyleModulation(nn.Module):
-    def __init__(self, channels, style_dim):
-        super(StyleModulation, self).__init__()
-        self.norm = nn.InstanceNorm2d(channels, affine=False)
-        self.style_fc = nn.Sequential(
-            nn.Linear(style_dim, channels * 2),
-            nn.ReLU(),
-            nn.Linear(channels * 2, channels * 2)
-        )
-
-    def forward(self, x, style):
-        x = self.norm(x)
-        style_params = self.style_fc(style)  # (B, 2C)
-        gamma, beta = style_params.chunk(2, dim=1)  # 各為 (B, C)
-        gamma = gamma.unsqueeze(2).unsqueeze(3)  # (B, C, 1, 1)
-        beta = beta.unsqueeze(2).unsqueeze(3)
-        return gamma * x + beta
+        # 針對 UCS-2 需要特別處理代理對
+        if len(char) == 2:
+            high, low = map(ord, char)
+            return (high - 0xD800) * 0x400 + (low - 0xDC00) + 0x10000
+        else:
+            return ord(char)
 
 class ResSkip(nn.Module):
     def __init__(self, channels):
@@ -75,6 +60,27 @@ class ResSkip(nn.Module):
 
     def forward(self, x):
         return x + self.relu(self.norm(self.conv(x)))
+
+class TransformerBlock(nn.Module):
+    def __init__(self, channels, num_heads=4, dropout=0.1):
+        super(TransformerBlock, self).__init__()
+        self.attention = nn.MultiheadAttention(channels, num_heads, dropout=dropout, batch_first=True)
+        self.norm1 = nn.LayerNorm(channels)
+        self.ffn = nn.Sequential(
+            nn.Linear(channels, channels * 4),
+            nn.ReLU(),
+            nn.Linear(channels * 4, channels)
+        )
+        self.norm2 = nn.LayerNorm(channels)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        x_flat = x.permute(0, 2, 3, 1).reshape(B, H * W, C)  # [B, N, C]
+        attn_output, _ = self.attention(x_flat, x_flat, x_flat)
+        x_flat = self.norm1(x_flat + attn_output)
+        ffn_output = self.ffn(x_flat)
+        x_flat = self.norm2(x_flat + ffn_output)
+        return x_flat.reshape(B, H, W, C).permute(0, 3, 1, 2)  # [B, C, H, W]
 
 class LinearAttention(nn.Module):
     def __init__(self, channels, key_channels=None):
@@ -109,163 +115,132 @@ class LinearAttention(nn.Module):
 class UnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc, input_nc=None, submodule=None,
                  norm_layer=nn.InstanceNorm2d, layer=0, embedding_dim=128,
-                 use_dropout=False, self_attention=False, blur=False, outermost=False, innermost=False, down_stride=2):
+                 use_dropout=False, self_attention=False, blur=False, outermost=False, innermost=False, use_transformer=False):
         super(UnetSkipConnectionBlock, self).__init__()
 
         self.outermost = outermost
         self.innermost = innermost
-        self.embedding_dim = embedding_dim
-        self.layer = layer
-        self.inner_nc = inner_nc
-        self.outer_nc = outer_nc
         use_bias = norm_layer != nn.BatchNorm2d
 
         if input_nc is None:
             input_nc = outer_nc
-
-        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=down_stride, padding=1, bias=use_bias) # 使用 down_stride
+        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
         nn.init.kaiming_normal_(downconv.weight, nonlinearity='leaky_relu')
         downrelu = nn.LeakyReLU(0.2, True)
         downnorm = norm_layer(inner_nc)
-
         uprelu = nn.ReLU(inplace=False)
         upnorm = norm_layer(outer_nc)
-
-        self.style_mod_down = None
-        self.style_mod_up = None
-        if not outermost:
-            self.style_mod_down = StyleModulation(inner_nc, embedding_dim)
-        if not innermost and not outermost:
-            self.style_mod_up = StyleModulation(outer_nc, embedding_dim)
 
         if outermost:
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
             nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downconv)
             self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
-            self.attn_block = None
-            self.res_skip = None
         elif innermost:
-            upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
             nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downrelu, downconv)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
-            self.res_skip = None
+            if use_transformer:
+                self.transformer_block = TransformerBlock(inner_nc) #增加transformer block
         else:
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
             nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downrelu, downconv, downnorm)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
-            self.res_skip = ResSkip(outer_nc)
             if use_dropout:
                 self.up.add_module("dropout", nn.Dropout(0.3))
 
         self.submodule = submodule
-        #self.attn_block = SelfAttention(inner_nc) if self_attention and layer in [4, 6] else None
         self.attn_block = LinearAttention(inner_nc) if self_attention and layer in [4, 6] else None
+        self.res_skip = ResSkip(outer_nc) if not outermost and not innermost else None
 
     def _process_submodule(self, encoded, style):
         if self.submodule:
             return self.submodule(encoded, style)
         else:
-            bottleneck_features = encoded.view(encoded.shape[0], -1)
-            return encoded, bottleneck_features
+            return encoded, None
 
     def _interpolate_if_needed(self, decoded, x):
         return F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False) if decoded.shape[2:] != x.shape[2:] else decoded
 
     def forward(self, x, style=None):
-        #print(f"Input shape: {x.shape}")
         encoded_pre_attn = self.down(x)
-        #print(f"encoded_pre_attn shape: {encoded_pre_attn.shape if encoded_pre_attn is not None else None}")
 
-        encoded_modulated_down = encoded_pre_attn
-        if self.style_mod_down and style is not None and not self.outermost:
-            # print(f"Shape of encoded_pre_attn before StyleModulation (down): {encoded_pre_attn.shape}, style shape: {style.shape}")
-            encoded_modulated_down = self.style_mod_down(encoded_pre_attn, style)
-            # print(f"encoded after style_mod_down shape: {encoded_modulated_down.shape}")
-
-        encoded_post_attn = encoded_modulated_down
+        encoded_post_attn = encoded_pre_attn
         if self.attn_block:
             encoded_post_attn = self.attn_block(encoded_pre_attn)
-            #print(f"encoded_post_attn shape: {encoded_post_attn.shape}")
 
-        # print(f"encoded_post_attn shape: {encoded_post_attn.shape if encoded_post_attn is not None else None}")
         if self.innermost:
-            bottleneck_features_flat = encoded_post_attn.view(x.shape[0], -1)
+            if hasattr(self, 'transformer_block'): #檢查是否包含transformer block
+                encoded_post_attn = self.transformer_block(encoded_post_attn) #加入transformer block
+            if style is not None:
+                encoded_post_attn = torch.cat([style.view(style.shape[0], style.shape[1], 1, 1), encoded_post_attn], dim=1)
             decoded = self.up(encoded_post_attn)
             decoded = self._interpolate_if_needed(decoded, x)
-            return torch.cat([x, decoded], 1), bottleneck_features_flat
-        else: # Intermediate or Outermost blocks
-            sub_output_cat, bottleneck_features_flat = self._process_submodule(encoded_post_attn, style)
-            decoded = self.up(sub_output_cat)
+            if self.res_skip:
+                decoded = self.res_skip(decoded)
+            return torch.cat([x, decoded], 1), encoded_post_attn.view(x.shape[0], -1)
+        else:
+            sub_output, encoded_real_A = self._process_submodule(encoded_post_attn, style)
+
+            decoded = self.up(sub_output)
             decoded = self._interpolate_if_needed(decoded, x)
 
             decoded_modulated_up = decoded
-            if self.style_mod_up is not None and style is not None and not self.outermost:
-                decoded_modulated_up = self.style_mod_up(decoded, style)
-
             if self.res_skip and not self.outermost:
                 decoded_modulated_up = self.res_skip(decoded_modulated_up)
 
             if self.outermost:
-                return decoded_modulated_up, bottleneck_features_flat
+                return decoded_modulated_up, encoded_real_A
             else:
-                return torch.cat([x, decoded_modulated_up], 1), bottleneck_features_flat
-                
+                return torch.cat([x, decoded_modulated_up], 1), encoded_real_A
+
 class UNetGenerator(nn.Module):
     def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
                  norm_layer=nn.InstanceNorm2d, use_dropout=False, self_attention=False, blur=False):
         super(UNetGenerator, self).__init__()
-
-        # 最底層（innermost）
+        
+        # 最底層（innermost），負責風格嵌入處理
         unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None,
-                                             norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim,
-                                             self_attention=self_attention, blur=blur, innermost=True, down_stride=1) # 修改 down_stride
+                                             norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim, 
+                                             self_attention=self_attention, blur=blur, innermost=True, use_transformer=True) #增加use_transformer=True
 
         # 中間層
         for index in range(num_downs - 5):
-            stride = 2 if index < num_downs - 6 else 1 # 只在較前的層下採樣
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block,
-                                                 norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout,
-                                                 self_attention=self_attention, blur=blur, embedding_dim=embedding_dim, down_stride=stride) # 添加 down_stride
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, 
+                                                 norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout, 
+                                                 self_attention=self_attention, blur=blur)
 
         # 上層（恢復影像解析度）
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block,
-                                             norm_layer=norm_layer, layer=5, self_attention=self_attention, blur=blur, embedding_dim=embedding_dim)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block,
-                                             norm_layer=norm_layer, layer=6, self_attention=self_attention, blur=blur, embedding_dim=embedding_dim)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block,
-                                             norm_layer=norm_layer, layer=7, self_attention=self_attention, blur=blur, embedding_dim=embedding_dim)
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, 
+                                             norm_layer=norm_layer, layer=5, self_attention=self_attention, blur=blur)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, 
+                                             norm_layer=norm_layer, layer=6, self_attention=self_attention, blur=blur)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, 
+                                             norm_layer=norm_layer, layer=7, self_attention=self_attention, blur=blur)
 
         # 最外層（outermost）
-        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block,
-                                             norm_layer=norm_layer, layer=8, self_attention=self_attention, blur=blur, outermost=True, embedding_dim=embedding_dim)
+        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, 
+                                             norm_layer=norm_layer, layer=8, self_attention=self_attention, blur=blur, outermost=True)
 
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
 
     def _prepare_style(self, style_or_label):
-        if style_or_label is not None and isinstance(style_or_label, torch.Tensor):
-             if 'LongTensor' in style_or_label.type():
-                  if style_or_label.max() >= self.embedder.num_embeddings:
-                       raise ValueError(f"Label index {style_or_label.max()} is out of bounds for embedding_num={self.embedder.num_embeddings}")
-                  return self.embedder(style_or_label)
-             else:
-                  return style_or_label
-        elif style_or_label is None:
-             raise ValueError("Style/label cannot be None for StyleModulation U-Net.")
-        else: # Handle non-tensor case? Maybe raise error.
-             raise TypeError(f"Unsupported type for style_or_label: {type(style_or_label)}")
+        if style_or_label is not None and 'LongTensor' in style_or_label.type():
+            return self.embedder(style_or_label)
+        else:
+            return style_or_label
 
     def forward(self, x, style_or_label=None):
         style = self._prepare_style(style_or_label)
-        fake_B, encoded_bottleneck = self.model(x, style)
-        return fake_B, encoded_bottleneck
+        fake_B, encoded_real_A = self.model(x, style)
+        return fake_B, encoded_real_A
 
     def encode(self, x, style_or_label=None):
         style = self._prepare_style(style_or_label)
-        _, encoded_bottleneck = self.model(x, style)
-        return encoded_bottleneck
+        _, encoded_real_A = self.model(x, style)
+        return encoded_real_A
 
 class Discriminator(nn.Module):
     def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, blur=False):
@@ -274,27 +249,19 @@ class Discriminator(nn.Module):
         use_bias = norm_layer != nn.BatchNorm2d
         kw = 5
         padw = 2
-
-        sequence = [
-            nn.utils.spectral_norm(nn.Conv2d(2, ndf, kernel_size=kw, stride=2, padding=padw)), # 將 input_nc 改為 2
-            nn.LeakyReLU(0.2, True)
-        ]
-
+        sequence = [nn.utils.spectral_norm(nn.Conv2d(2, ndf, kernel_size=kw, stride=2, padding=padw)), # 將 input_nc 改為 2
+            nn.LeakyReLU(0.2, True)]
         nf_mult = 1
         for n in range(1, 3):
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
-            sequence += [
-                nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
+            sequence += [nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
                 norm_layer(ndf * nf_mult),
-                nn.LeakyReLU(0.2, True)
-            ]
+                nn.LeakyReLU(0.2, True) ]
 
-        sequence += [
-            nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
+        sequence += [ nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
             norm_layer(ndf * nf_mult),
-            nn.LeakyReLU(0.2, True)
-        ]
+            nn.LeakyReLU(0.2, True) ]
 
         self.model = nn.Sequential(*sequence)
         self.global_pool = nn.AdaptiveAvgPool2d((4, 4))  # 自適應池化
@@ -310,14 +277,25 @@ class Discriminator(nn.Module):
     def forward(self, input):
         if self.blur:
             input = self.gaussian_blur(input)
-
         features = self.model(input)
         features = self.global_pool(features)
-        features = features.view(input.shape[0], -1)  # 展平成 batch x final_features
+        features = features.view(input.shape[0], -1)
 
         binary_logits = self.binary(features)
         category_logits = self.category(features)
         return binary_logits, category_logits
+
+class CategoryLoss(nn.Module):
+    def __init__(self, category_num):
+        super(CategoryLoss, self).__init__()
+        emb = nn.Embedding(category_num, category_num)
+        emb.weight.data = torch.eye(category_num)
+        self.emb = emb
+        self.loss = nn.BCEWithLogitsLoss()
+
+    def forward(self, category_logits, labels):
+        target = self.emb(labels)
+        return self.loss(category_logits, target)
 
 class CategoryLoss(nn.Module):
     def __init__(self, category_num):
@@ -364,33 +342,31 @@ class PerceptualLoss(nn.Module):
         return loss
 
 class Zi2ZiModel:
-    def __init__(self, input_nc=1, embedding_num=2, embedding_dim=128, ngf=64, ndf=64,
+    def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128, ngf=64, ndf=64,
                  Lconst_penalty=10, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  self_attention=False, residual_block=False, 
                  weight_decay = 1e-5, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
                  gradient_clip=0.5, norm_type="instance"):
 
-        self.norm_type = norm_type
+        self.norm_type = norm_type  # 保存 norm_type
 
         if is_training:
             self.use_dropout = True
         else:
             self.use_dropout = False
 
-        # Loss weights
         self.Lconst_penalty = Lconst_penalty
         self.Lcategory_penalty = Lcategory_penalty
         self.L1_penalty = L1_penalty
-        self.perceptual_weight = 10.0 # Make perceptual weight configurable?
-        self.gradient_penalty_weight = 10.0 # Make GP weight configurable?
 
         self.epoch = epoch
         self.schedule = schedule
 
         self.save_dir = save_dir
         self.gpu_ids = gpu_ids
-        self.device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
+        self.device = device
 
         self.input_nc = input_nc
         self.embedding_dim = embedding_dim
@@ -402,57 +378,51 @@ class Zi2ZiModel:
         self.weight_decay = weight_decay
         self.is_training = is_training
         self.self_attention=self_attention
-        #self.residual_block=residual_block
+        self.residual_block=residual_block
         self.g_blur = g_blur
         self.d_blur = d_blur
+
+        self.feature_matching_loss = nn.L1Loss()
         self.gradient_clip = gradient_clip
 
         self.setup()
-
         self.scaler_G = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
         self.scaler_D = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
 
     def setup(self):
-        if self.norm_type.lower() == "batch":
-            norm_layer_g = nn.BatchNorm2d
-        elif self.norm_type.lower() == "instance":
-            norm_layer_g = nn.InstanceNorm2d
-        else:
-            raise ValueError(f"Unsupported norm_type for Generator: {self.norm_type}")
-        norm_layer_d = nn.BatchNorm2d
+        if self.norm_type == "batch":
+            norm_layer = nn.BatchNorm2d
+        else:  # 預設或 instance
+            norm_layer = nn.InstanceNorm2d
 
         self.netG = UNetGenerator(
             input_nc=self.input_nc,
-            output_nc=self.input_nc, # Output is single channel like input
+            output_nc=self.input_nc,
             ngf=self.ngf,
             use_dropout=self.use_dropout,
             embedding_num=self.embedding_num,
             embedding_dim=self.embedding_dim,
             self_attention=self.self_attention,
             blur=self.g_blur,
-            norm_layer=norm_layer_g # Pass chosen norm layer
-        ).to(self.device)
-
-        # --- Initialize Discriminator ---
+            norm_layer=norm_layer
+        )
         self.netD = Discriminator(
-            input_nc=self.input_nc, # D sees concatenated input (A+B = 1+1=2 channels)
+            input_nc=2 * self.input_nc,
             embedding_num=self.embedding_num,
             ndf=self.ndf,
             blur=self.d_blur,
-            norm_layer=norm_layer_d # Use specified norm for D
-        ).to(self.device)
+            norm_layer=nn.BatchNorm2d
+        )
 
         init_net(self.netG, gpu_ids=self.gpu_ids)
         init_net(self.netD, gpu_ids=self.gpu_ids)
 
         self.optimizer_G = torch.optim.AdamW(self.netG.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
         self.optimizer_D = torch.optim.AdamW(self.netD.parameters(), lr=self.lr, betas=(self.beta1, 0.999), weight_decay=self.weight_decay)
-        print(f"Optimizers: AdamW (lr={self.lr}, beta1={self.beta1}, wd={self.weight_decay})")
-
-        eta_min = self.lr * 0.01 # Example: anneal down to 1% of initial LR
+        
+        eta_min = 1e-6
         self.scheduler_G = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_G, T_max=self.epoch, eta_min=eta_min)
         self.scheduler_D = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_D, T_max=self.epoch, eta_min=eta_min)
-        print(f"Schedulers: CosineAnnealingLR (T_max={self.epoch}, eta_min={eta_min})")
 
         self.criterion_L1 = nn.L1Loss().to(self.device)
         self.criterion_MSE = nn.MSELoss().to(self.device) # For const_loss
@@ -460,9 +430,6 @@ class Zi2ZiModel:
         self.criterion_Perceptual = PerceptualLoss().to(self.device) # Assumes VGG normalization inside
         self.criterion_FeatureMatch = nn.L1Loss().to(self.device) # For Feature Matching Loss
 
-        print("Loss functions initialized.")
-
-        # Set training/eval mode
         self.set_train_eval_mode()
 
     def set_train_eval_mode(self):
@@ -480,6 +447,16 @@ class Zi2ZiModel:
         self.real_A = data['A'].to(self.device) # Input font image
         self.real_B = data['B'].to(self.device) # Target font image
 
+    def set_input_b(self, labels, real_A, real_B):
+        if self.gpu_ids:
+            self.real_A = real_A.to(self.gpu_ids[0])
+            self.real_B = real_B.to(self.gpu_ids[0])
+            self.labels = labels.to(self.gpu_ids[0])
+        else:
+            self.real_A = real_A
+            self.real_B = real_B
+            self.labels = labels
+
     def forward(self):
         self.fake_B, self.encoded_real_A = self.netG(self.real_A, self.labels)
         self.encoded_fake_B = self.netG.encode(self.fake_B, self.labels)
@@ -494,17 +471,17 @@ class Zi2ZiModel:
     def compute_gradient_penalty(self, real_samples, fake_samples):
         alpha = torch.rand(real_samples.size(0), 1, 1, 1, device=self.device)
         interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
-        d_interpolates, _ = self.netD(interpolates) # Get discriminator output for interpolates
-        grad_outputs = torch.ones(d_interpolates.size(), device=self.device, requires_grad=False)
+        interpolates_logits, _ = self.netD(interpolates)
+        grad_outputs = torch.ones(interpolates_logits.size(), device=self.device)
         gradients = torch.autograd.grad(
-            outputs=d_interpolates,
-            inputs=interpolates,
+            outputs=interpolates_logits, 
+            inputs=interpolates, 
             grad_outputs=grad_outputs,
             create_graph=True,
             retain_graph=True,
             only_inputs=True,
         )[0]
-        gradients = gradients.view(gradients.size(0), -1) # Flatten gradients
+        gradients = gradients.view(gradients.size(0), -1)
         gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
         return gradient_penalty
 
@@ -515,109 +492,116 @@ class Zi2ZiModel:
         real_D_logits, real_category_logits = self.netD(real_AB)
         fake_D_logits, fake_category_logits = self.netD(fake_AB)
 
-        loss_D_adv = -torch.mean(F.logsigmoid(real_D_logits - fake_D_logits) +
-                                  F.logsigmoid(fake_D_logits - real_D_logits))
+        real_category_loss = self.criterion_Category(real_category_logits, self.labels)
+        fake_category_loss = self.criterion_Category(fake_category_logits, self.labels)
+        category_loss = (real_category_loss + fake_category_loss) * self.Lcategory_penalty
 
-        loss_D_real_category = self.criterion_Category(real_category_logits, self.labels)
-        loss_D_fake_category = self.criterion_Category(fake_category_logits, self.labels)
-        loss_D_category = (loss_D_real_category + loss_D_fake_category) * 0.5 # Average category loss
+        d_loss = torch.mean(F.logsigmoid(real_D_logits - fake_D_logits) +
+                            F.logsigmoid(fake_D_logits - real_D_logits))
 
-        gp = self.compute_gradient_penalty(real_AB, fake_AB) # Keep it for now
+        gp = self.compute_gradient_penalty(real_AB, fake_AB)
 
-        self.loss_D = loss_D_adv + \
-                      loss_D_category * self.Lcategory_penalty + \
-                      gp * self.gradient_penalty_weight
+        gradient_penalty_weight = 10.0
+        self.d_loss = - d_loss + category_loss / 2.0 + gradient_penalty_weight * gp
 
-        return loss_D_adv, loss_D_category, gp
+        return category_loss
 
     def backward_G(self, no_target_source=False):
-        real_AB = torch.cat([self.real_A, self.real_B], 1).detach() # Detach real pair
         fake_AB = torch.cat([self.real_A, self.fake_B], 1)
-        real_D_logits, _ = self.netD(real_AB)
+        real_AB = torch.cat([self.real_A, self.real_B], 1)
+
         fake_D_logits, fake_category_logits = self.netD(fake_AB)
+        real_D_logits, _ = self.netD(real_AB)
 
-        loss_G_adv = -torch.mean(F.logsigmoid(fake_D_logits - real_D_logits) +
-                                  F.logsigmoid(real_D_logits - fake_D_logits))
+        const_loss = self.Lconst_penalty * self.criterion_MSE(self.encoded_real_A, self.encoded_fake_B)
+        l1_loss = self.L1_penalty * self.criterion_L1(self.fake_B, self.real_B)
+        fake_category_loss = self.Lcategory_penalty * self.criterion_Category(fake_category_logits, self.labels)
+        g_loss_adv = -torch.mean(F.logsigmoid(fake_D_logits - real_D_logits))
 
-        loss_G_category = self.criterion_Category(fake_category_logits, self.labels)
+        fm_loss = self.compute_feature_matching_loss(real_AB, fake_AB)
 
-        loss_G_L1 = self.criterion_L1(self.fake_B, self.real_B)
+        self.g_loss = g_loss_adv + l1_loss + fake_category_loss + const_loss + fm_loss
+        
+        perceptual_loss = self.criterion_Perceptual(self.fake_B, self.real_B)
+        perceptual_weight = 10.0  # 感知損失的權重
+        self.g_loss += perceptual_weight * perceptual_loss
 
-        loss_G_const = self.criterion_MSE(self.encoded_fake_B, self.encoded_real_A.detach()) # Detach real encoding
+        return const_loss, l1_loss, g_loss_adv, fm_loss, perceptual_loss
 
-        loss_G_FM = self.compute_feature_matching_loss(real_AB, fake_AB)
-
-        loss_G_perceptual = self.criterion_Perceptual(self.fake_B, self.real_B)
-
-        self.loss_G = loss_G_adv + \
-                      loss_G_category * self.Lcategory_penalty + \
-                      loss_G_L1 * self.L1_penalty + \
-                      loss_G_const * self.Lconst_penalty + \
-                      loss_G_FM + \
-                      loss_G_perceptual * self.perceptual_weight
-
-        return loss_G_adv, loss_G_category, loss_G_L1, loss_G_const, loss_G_FM, loss_G_perceptual
-
-    def optimize_parameters(self, use_autocast=True):
+    def optimize_parameters(self, use_autocast=False):
         self.forward()
         self.set_requires_grad(self.netD, True)
         self.optimizer_D.zero_grad()
 
-        loss_D_adv, loss_D_category, gp = 0, 0, 0
         if use_autocast:
             with torch.amp.autocast(device_type='cuda'):
-                loss_D_adv, loss_D_category, gp = self.backward_D()
-                scaled_loss_D = self.scaler_D.scale(self.loss_D)
-                scaled_loss_D.backward()
+                category_loss = self.backward_D()
+                scaled_d_loss = self.scaler_D.scale(self.d_loss)
+                scaled_d_loss.backward()
                 self.scaler_D.unscale_(self.optimizer_D)
+                grad_norm_d = torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
                 self.scaler_D.step(self.optimizer_D)
                 self.scaler_D.update()
         else:
-            loss_D_adv, loss_D_category, gp = self.backward_D()
-            self.loss_D.backward()
+            category_loss = self.backward_D()
+            self.d_loss.backward()
             grad_norm_d = torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
             self.optimizer_D.step()
 
-        if torch.isnan(self.loss_D):
-             print("ERROR: Discriminator loss is NaN. Stopping training.")
-             raise RuntimeError("Discriminator loss is NaN")
+        # 檢查判別器損失是否為 NaN
+        if torch.isnan(self.d_loss):
+            print("判別器損失為 NaN，停止訓練。")
+            return  # 或執行其他適當的錯誤處理
 
-        self.set_requires_grad(self.netD, False) # Disable grads for D
+        self.set_requires_grad(self.netD, False)
         self.optimizer_G.zero_grad()
-        self.forward() # Forward pass needed again for G loss components
+        const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = 0, 0, 0, 0, 0
 
         if use_autocast:
             with torch.amp.autocast(device_type='cuda'):
-                loss_G_adv, loss_G_category, loss_G_L1, loss_G_const, loss_G_FM, loss_G_perceptual = self.backward_G()
-                scaled_loss_G = self.scaler_G.scale(self.loss_G)
-                scaled_loss_G.backward()
+                const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
+                scaled_g_loss = self.scaler_G.scale(self.g_loss)
+                scaled_g_loss.backward()
                 self.scaler_G.unscale_(self.optimizer_G)
-                torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
                 self.scaler_G.step(self.optimizer_G)
                 self.scaler_G.update()
         else:
-            loss_G_adv, loss_G_category, loss_G_L1, loss_G_const, loss_G_FM, loss_G_perceptual = self.backward_G()
-            self.loss_G.backward()
+            const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
+            self.g_loss.backward()
             grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
             self.optimizer_G.step()
 
+        self.forward()
+        self.optimizer_G.zero_grad()
 
-        if torch.isnan(self.loss_G):
-             print("ERROR: Generator loss is NaN. Stopping training.")
-             raise RuntimeError("Generator loss is NaN")
+        if use_autocast:
+            with torch.amp.autocast(device_type='cuda'):
+                const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
+                scaled_g_loss = self.scaler_G.scale(self.g_loss)
+                scaled_g_loss.backward()
+                self.scaler_G.unscale_(self.optimizer_G)
+                grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
+                self.scaler_G.step(self.optimizer_G)
+                self.scaler_G.update()
+        else:
+            const_loss, l1_loss, cheat_loss, fm_loss, perceptual_loss = self.backward_G()
+            self.g_loss.backward()
+            grad_norm_g = torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
+            self.optimizer_G.step()
+
+        # 可以選擇性地監控梯度範數
+        # print(f"判別器梯度範數：{grad_norm_d}")
+        # print(f"生成器梯度範數：{grad_norm_g}")
 
         return {
-            'G_adv': loss_G_adv.item(),
-            'G_category': loss_G_category.item(),
-            'G_L1': loss_G_L1.item(),
-            'G_const': loss_G_const.item(),
-            'G_FM': loss_G_FM.item(),
-            'G_perceptual': loss_G_perceptual.item(),
-            'G_total': self.loss_G.item(),
-            'D_adv': loss_D_adv.item(),
-            'D_category': loss_D_category.item(),
-            'D_gp': gp.item(),
-            'D_total': self.loss_D.item()
+            'd_loss': self.d_loss.item(),
+            'g_loss': self.g_loss.item(),
+            'const_loss': const_loss.item(),
+            'l1_loss': l1_loss.item(),
+            'cheat_loss': cheat_loss.item(),
+            'fm_loss': fm_loss.item(),
+            'perceptual_loss': perceptual_loss.item()
         }
 
     def set_requires_grad(self, nets, requires_grad=False):
@@ -729,15 +713,17 @@ class Zi2ZiModel:
         else:
             cv2.imwrite(save_path, image)
 
-    def sample(self, batch, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas=256,
+    def sample(self, batch_data, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas=256,
                filename_rule="seq", binary_image=True, anti_aliasing_strength=1, image_ext="png"):
         """生成並儲存圖像樣本"""
         with torch.no_grad():
-            self.set_input(batch[0], batch[2], batch[1])
+            labels, image_B, image_A = batch_data
+            model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
+            self.set_input(model_input_data)
             self.forward()
 
             output_images = torch.cat([self.fake_B, self.real_B], 3)
-            for i, (label, image_tensor) in enumerate(zip(batch[0], output_images)):
+            for i, (label, image_tensor) in enumerate(zip(batch_data[0], output_images)):
                 label_dir = os.path.join(basename, str(label.item()))
                 os.makedirs(label_dir, exist_ok=True)  # 確保目錄存在
 
