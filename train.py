@@ -76,52 +76,98 @@ def train(args):
         norm_type=args.norm_type
     )
 
-    model.setup()
     model.print_networks(True)
+
+    start_epoch = 0
+    global_steps = 0    
     if args.resume:
+        print(f"Resumed model from step/epoch: {args.resume}")
+        # If loading optimizer/scheduler state, you'd need to load those too and potentially update start_epoch/global_steps
         model.load_networks(args.resume)
 
     train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'), input_nc=args.input_nc)
     dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     total_batches = math.ceil(len(train_dataset) / args.batch_size)
 
-    global_steps = 0
-    start_time = time.time()  # 確保 start_time 被賦值
-    for epoch in range(args.epoch):
-        for batch_id, batch in enumerate(dataloader):
-            model.set_input(batch[0], batch[2], batch[1])
-            const_loss, l1_loss, cheat_loss, fm_loss, vgg_loss = model.optimize_parameters(args.use_autocast)
 
-            if batch_id % 100 == 0:
-                elapsed_time = time.time() - start_time
-                print(
-                    f"Epoch: [{epoch:2d}], [{batch_id:4d}/{total_batches:4d}] "
-                    f"time: {elapsed_time:.0f}, d_loss: {model.d_loss.item():.5f}, "
-                    f"g_loss: {model.g_loss.item():.5f}, cheat_loss: {cheat_loss:.5f}, "
-                    f"const_loss: {const_loss:.5f}, l1_loss: {l1_loss:.5f}, fm_loss: {fm_loss:.5f}, vgg_loss: {vgg_loss:.5f}"
-                )
+    # --- Training Loop ---
+    start_time = time.time()
+    print(f"Starting training from epoch {start_epoch}...")
 
-            if global_steps % args.checkpoint_steps == 0:
-                if global_steps >= args.checkpoint_steps_after:
-                    print(f"checkpoint: current step {global_steps}")
-                    model.save_networks(global_steps)
-                    if args.checkpoint_only_last:
-                        for checkpoint_index in range(0, global_steps, args.checkpoint_steps):
-                            for net_type in ["D", "G"]:
-                                filepath = os.path.join(checkpoint_dir, f"{checkpoint_index}_net_{net_type}.pth")
-                                if os.path.isfile(filepath):
-                                    os.remove(filepath)
-                        clear_google_drive_trash(drive_service)
-                else:
-                    print(f"checkpoint: current step {global_steps}，save after step {args.checkpoint_steps_after}")
+    for epoch in range(start_epoch, args.epoch):
+        epoch_start_time = time.time()
+        print(f"\n--- Epoch {epoch}/{args.epoch - 1} ---")
+
+        for batch_id, batch_data in enumerate(dataloader):
+            current_step_time = time.time()
+            
+            labels, image_B, image_A = batch_data
+            model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
+            model.set_input(model_input_data)
+
+            losses = {}
+            losses = model.optimize_parameters(args.use_autocast)
             global_steps += 1
 
-        if (epoch + 1) % args.schedule == 0:
-            model.update_lr()
+            if batch_id % 100 == 0:
+                elapsed_batch_time = time.time() - current_step_time
+                total_elapsed_time = time.time() - start_time
+                # Use keys from the losses dictionary
+                print(
+                    f"Epoch: [{epoch:3d}/{args.epoch-1}], Batch: [{batch_id:4d}/{total_batches-1}] "
+                    f"Step: {global_steps} | Time/Batch: {elapsed_batch_time:.2f}s | Total Time: {total_elapsed_time:.0f}s\n"
+                    f"  Losses: D_Total={losses['D_total']:.4f}, G_Total={losses['G_total']:.4f}\n"
+                    f"    G: [Adv={losses['G_adv']:.4f}, Cat={losses['G_category']:.4f}, L1={losses['G_L1']:.4f}, "
+                    f"Const={losses['G_const']:.4f}, FM={losses['G_FM']:.4f}, Perc={losses['G_perceptual']:.4f}]\n"
+                    f"    D: [Adv={losses['D_adv']:.4f}, Cat={losses['D_category']:.4f}, GP={losses['D_gp']:.4f}]"
+                )
 
-    model.save_networks(global_steps)
-    elapsed_time = time.time() - start_time
-    print(f"經過時間：{elapsed_time:4.1f} 秒")
+            # --- Checkpointing ---
+            if global_steps % args.checkpoint_steps == 0:
+                if global_steps >= args.checkpoint_steps_after:
+                    print(f"\nSaving checkpoint at step {global_steps}...")
+                    model.save_networks(global_steps) # Save with step label
+                    print(f"Checkpoint saved.")
+
+                    # --- Clean up old checkpoints (Optional: only keep last) ---
+                    if args.checkpoint_only_last and drive_service is None: # Only delete local if not using Drive backup
+                        # Find checkpoints older than the current one
+                        current_step_label = global_steps
+                        for step_label in range(args.checkpoint_steps_after, current_step_label, args.checkpoint_steps):
+                            for net_type in ["D", "G"]:
+                                old_filepath = os.path.join(checkpoint_dir, f"{step_label}_net_{net_type}.pth")
+                                if os.path.isfile(old_filepath):
+                                    try:
+                                        os.remove(old_filepath)
+                                        print(f"  Removed old checkpoint: {old_filepath}")
+                                    except OSError as e:
+                                        print(f"  Error removing {old_filepath}: {e}")
+                        # Note: GDrive cleanup logic might need refinement based on API usage
+                        clear_google_drive_trash(drive_service) # This might be too aggressive
+
+                else:
+                    print(f"\nCheckpoint step {global_steps} reached, but saving starts after step {args.checkpoint_steps_after}.")
+
+
+        # --- End of Epoch ---
+        epoch_time = time.time() - epoch_start_time
+        print(f"\n--- End of Epoch {epoch} --- Time: {epoch_time:.2f}s ---")
+
+        # Update Learning Rate Schedulers
+        model.scheduler_G.step()
+        model.scheduler_D.step()
+        print(f"LR Scheduler stepped. Current LR G: {model.scheduler_G.get_last_lr()[0]:.6f}, LR D: {model.scheduler_D.get_last_lr()[0]:.6f}")
+
+
+    # --- End of Training ---
+    print("\n--- Training Finished ---")
+    # Save the final model state
+    print("Saving final model...")
+    model.save_networks('latest') # Save with 'latest' label
+    print("Final model saved.")
+
+    total_training_time = time.time() - start_time
+    print(f"Total Training Time: {total_training_time:.2f} seconds")
 
 
 if __name__ == '__main__':
@@ -135,8 +181,8 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint_steps_after', type=int, default=1, help='save the number of batches after')
     parser.add_argument('--d_blur', action='store_true')
     parser.add_argument('--data_dir', type=str, default=None, help='overwrite data dir path, if data dir is not same with checkpoint dir')
-    parser.add_argument('--embedding_dim', type=int, default=64, help="dimension for embedding")
-    parser.add_argument('--embedding_num', type=int, default=40, help="number for distinct embeddings")
+    parser.add_argument('--embedding_dim', type=int, default=128, help="dimension for embedding")
+    parser.add_argument('--embedding_num', type=int, default=2, help="number for distinct embeddings")
     parser.add_argument('--epoch', type=int, default=100, help='number of epoch')
     parser.add_argument('--experiment_dir', required=True, help='experiment directory, data, samples,checkpoints,etc')
     parser.add_argument('--g_blur', action='store_true')

@@ -42,7 +42,6 @@ def infer(args):
         gpu_ids=args.gpu_ids, self_attention=args.self_attention,
         residual_block=args.residual_block, is_training=False
     )
-    model.setup()
     model.print_networks(True)
     if not model.load_networks(args.resume):
         print("Error: Failed to load model networks.")
@@ -120,7 +119,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint_dir', type=str, default=None, help='overwrite checkpoint dir path')
     parser.add_argument('--crop_src_font', action='store_true')
     parser.add_argument('--embedding_dim', type=int, default=128, help="dimension for embedding")
-    parser.add_argument('--embedding_num', type=int, default=40, help="number for distinct embeddings")
+    parser.add_argument('--embedding_num', type=int, default=2, help="number for distinct embeddings")
     parser.add_argument('--experiment_dir', required=True, help='experiment directory, data, samples,checkpoints,etc')
     parser.add_argument('--experiment_infer_dir', type=str, default=None, help='overwrite infer dir path')
     parser.add_argument('--filename_rule', type=str, default="unicode_int", choices=['seq', 'char', 'unicode_int', 'unicode_hex'])
