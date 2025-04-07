@@ -68,6 +68,7 @@ def train(args):
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
         self_attention=args.self_attention,
+        attention_type=args.attention_type,
         residual_block=args.residual_block,
         epoch=args.epoch,
         g_blur=args.g_blur,
@@ -105,7 +106,6 @@ def train(args):
             model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
             model.set_input(model_input_data)
 
-            losses = {}
             losses = model.optimize_parameters(args.use_autocast)
             global_steps += 1
 
@@ -169,8 +169,7 @@ def train(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train')
-    parser.add_argument("--norm_type", type=str, default="instance", help="normalization type: instance or batch")
-    parser.add_argument("--use_autocast", action="store_true", help="Enable autocast for mixed precision training")
+    parser.add_argument('--attention_type', type=str, default="linear", help="切換 Attention 的類型")
     parser.add_argument('--batch_size', type=int, default=16, help='number of examples in batch')
     parser.add_argument('--checkpoint_dir', type=str, default=None, help='overwrite checkpoint dir path, if data dir is not same with checkpoint dir')
     parser.add_argument('--checkpoint_only_last', action='store_true', help='remove all previous versions, only keep last version')
@@ -189,10 +188,12 @@ if __name__ == '__main__':
     parser.add_argument('--Lcategory_penalty', type=float, default=1.0, help='weight for category loss')
     parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
+    parser.add_argument('--norm_type', type=str, default="instance", help='normalization type: instance or batch')
     parser.add_argument('--random_seed', type=int, default=777, help='random seed for random and pytorch')
     parser.add_argument('--residual_block', action='store_true')
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
     parser.add_argument('--schedule', type=int, default=20, help='number of epochs to half learning rate')
     parser.add_argument('--self_attention', action='store_true')
+    parser.add_argument('--use_autocast', action="store_true", help='Enable autocast for mixed precision training')
     args = parser.parse_args()
     train(args)

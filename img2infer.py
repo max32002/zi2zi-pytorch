@@ -39,7 +39,9 @@ def infer(args):
     model = Zi2ZiModel(
         input_nc=args.input_nc, embedding_num=args.embedding_num, embedding_dim=args.embedding_dim,
         Lconst_penalty=args.Lconst_penalty, Lcategory_penalty=args.Lcategory_penalty, save_dir=checkpoint_dir,
-        gpu_ids=args.gpu_ids, self_attention=args.self_attention,
+        gpu_ids=args.gpu_ids, 
+        self_attention=args.self_attention,
+        attention_type=args.attention_type,
         residual_block=args.residual_block, is_training=False
     )
     model.print_networks(True)
@@ -114,6 +116,7 @@ def infer(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Infer')
     parser.add_argument('--anti_alias', type=int, default=1)
+    parser.add_argument('--attention_type', type=str, default="linear", help="切換 Attention 的類型")
     parser.add_argument('--batch_size', type=int, default=16, help='number of examples in batch')
     parser.add_argument('--canvas_size', type=int, default=256)
     parser.add_argument('--checkpoint_dir', type=str, default=None, help='overwrite checkpoint dir path')

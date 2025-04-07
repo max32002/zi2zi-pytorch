@@ -115,7 +115,7 @@ class LinearAttention(nn.Module):
 class UnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc, input_nc=None, submodule=None,
                  norm_layer=nn.InstanceNorm2d, layer=0, embedding_dim=128,
-                 use_dropout=False, self_attention=False, blur=False, outermost=False, innermost=False, use_transformer=False):
+                 use_dropout=False, self_attention=False, attention_type='linear', blur=False, outermost=False, innermost=False, use_transformer=False):
         super(UnetSkipConnectionBlock, self).__init__()
 
         self.outermost = outermost
@@ -132,19 +132,19 @@ class UnetSkipConnectionBlock(nn.Module):
         upnorm = norm_layer(outer_nc)
 
         if outermost:
-            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downconv)
             self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
         elif innermost:
-            upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downrelu, downconv)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_transformer:
                 self.transformer_block = TransformerBlock(inner_nc) #增加transformer block
         else:
-            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downrelu, downconv, downnorm)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
@@ -152,7 +152,15 @@ class UnetSkipConnectionBlock(nn.Module):
                 self.up.add_module("dropout", nn.Dropout(0.3))
 
         self.submodule = submodule
-        self.attn_block = LinearAttention(inner_nc) if self_attention and layer in [4, 6] else None
+        if self_attention and layer in [1, 3, 6]:
+            if attention_type == 'linear':
+                self.attn_block = LinearAttention(inner_nc)
+            elif attention_type == 'self':
+                self.attn_block = SelfAttention(inner_nc)
+            else:
+                raise ValueError(f"Invalid attention_type: {attention_type}. Must be 'linear' or 'self'.")
+        else:
+            self.attn_block = None
         self.res_skip = ResSkip(outer_nc) if not outermost and not innermost else None
 
     def _process_submodule(self, encoded, style):
@@ -198,31 +206,31 @@ class UnetSkipConnectionBlock(nn.Module):
 
 class UNetGenerator(nn.Module):
     def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
-                 norm_layer=nn.InstanceNorm2d, use_dropout=False, self_attention=False, blur=False):
+                 norm_layer=nn.InstanceNorm2d, use_dropout=False, self_attention=False, blur=False, attention_type='linear'):
         super(UNetGenerator, self).__init__()
         
         # 最底層（innermost），負責風格嵌入處理
         unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None,
-                                             norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim, 
-                                             self_attention=self_attention, blur=blur, innermost=True, use_transformer=True) #增加use_transformer=True
+                                            norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim,
+                                            self_attention=self_attention, blur=blur, innermost=True, use_transformer=True, attention_type=attention_type)
 
         # 中間層
         for index in range(num_downs - 5):
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, 
-                                                 norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout, 
-                                                 self_attention=self_attention, blur=blur)
+            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block,
+                                                norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout,
+                                                self_attention=self_attention, blur=blur, attention_type=attention_type)
 
         # 上層（恢復影像解析度）
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, 
-                                             norm_layer=norm_layer, layer=5, self_attention=self_attention, blur=blur)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, 
-                                             norm_layer=norm_layer, layer=6, self_attention=self_attention, blur=blur)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, 
-                                             norm_layer=norm_layer, layer=7, self_attention=self_attention, blur=blur)
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block,
+                                            norm_layer=norm_layer, layer=5, self_attention=self_attention, blur=blur, attention_type=attention_type)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block,
+                                            norm_layer=norm_layer, layer=6, self_attention=self_attention, blur=blur, attention_type=attention_type)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block,
+                                            norm_layer=norm_layer, layer=7, self_attention=self_attention, blur=blur, attention_type=attention_type)
 
         # 最外層（outermost）
-        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, 
-                                             norm_layer=norm_layer, layer=8, self_attention=self_attention, blur=blur, outermost=True)
+        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block,
+                                            norm_layer=norm_layer, layer=8, self_attention=self_attention, blur=blur, outermost=True, attention_type=attention_type)
 
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
 
@@ -431,7 +439,7 @@ class Zi2ZiModel:
     def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128, ngf=64, ndf=64,
                  Lconst_penalty=10, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
-                 self_attention=False, residual_block=False,
+                 self_attention=False, attention_type='linear', residual_block=False,
                  weight_decay = 1e-5, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
                  gradient_clip=0.5, norm_type="instance"):
 
@@ -463,6 +471,7 @@ class Zi2ZiModel:
         self.weight_decay = weight_decay
         self.is_training = is_training
         self.self_attention=self_attention
+        self.attention_type=attention_type
         self.residual_block=residual_block
         self.g_blur = g_blur
         self.d_blur = d_blur
@@ -487,6 +496,7 @@ class Zi2ZiModel:
             embedding_num=self.embedding_num,
             embedding_dim=self.embedding_dim,
             self_attention=self.self_attention,
+            attention_type=self.attention_type,
             blur=self.g_blur,
             norm_layer=norm_layer
         )
