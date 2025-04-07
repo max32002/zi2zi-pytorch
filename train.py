@@ -127,21 +127,13 @@ def train(args):
                     print(f"Checkpoint saved.")
 
                     # --- Clean up old checkpoints (Optional: only keep last) ---
-                    if args.checkpoint_only_last and drive_service is None: # Only delete local if not using Drive backup
-                        # Find checkpoints older than the current one
-                        current_step_label = global_steps
-                        for step_label in range(args.checkpoint_steps_after, current_step_label, args.checkpoint_steps):
+                    if args.checkpoint_only_last:
+                        for checkpoint_index in range(0, global_steps, args.checkpoint_steps):
                             for net_type in ["D", "G"]:
-                                old_filepath = os.path.join(checkpoint_dir, f"{step_label}_net_{net_type}.pth")
-                                if os.path.isfile(old_filepath):
-                                    try:
-                                        os.remove(old_filepath)
-                                        print(f"  Removed old checkpoint: {old_filepath}")
-                                    except OSError as e:
-                                        print(f"  Error removing {old_filepath}: {e}")
-                        # Note: GDrive cleanup logic might need refinement based on API usage
-                        clear_google_drive_trash(drive_service) # This might be too aggressive
-
+                                filepath = os.path.join(checkpoint_dir, f"{checkpoint_index}_net_{net_type}.pth")
+                                if os.path.isfile(filepath):
+                                    os.remove(filepath)
+                        clear_google_drive_trash(drive_service)
                 else:
                     print(f"\nCheckpoint step {global_steps} reached, but saving starts after step {args.checkpoint_steps_after}.")
 
@@ -192,7 +184,6 @@ if __name__ == '__main__':
     parser.add_argument('--random_seed', type=int, default=777, help='random seed for random and pytorch')
     parser.add_argument('--residual_block', action='store_true')
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
-    parser.add_argument('--schedule', type=int, default=20, help='number of epochs to half learning rate')
     parser.add_argument('--self_attention', action='store_true')
     parser.add_argument('--use_autocast', action="store_true", help='Enable autocast for mixed precision training')
     args = parser.parse_args()
