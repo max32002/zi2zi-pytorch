@@ -627,18 +627,18 @@ class Zi2ZiModel:
                 print('[Network %s] Total number of parameters : %.3f M' % (name, num_params / 1e6))
         print('-----------------------------------------------')
 
-    def save_networks(self, epoch):
+    def save_networks(self, step):
         assert isinstance(self.netG.state_dict(), dict), "netG.state_dict() should be a dictionary"
         assert isinstance(self.netD.state_dict(), dict), "netD.state_dict() should be a dictionary"
 
-        torch.save(self.netG.state_dict(), os.path.join(self.save_dir, f"{epoch}_net_G.pth"))
-        torch.save(self.netD.state_dict(), os.path.join(self.save_dir, f"{epoch}_net_D.pth"))
-        print(f"💾 Checkpoint saved at epoch {epoch}")
+        torch.save(self.netG.state_dict(), os.path.join(self.save_dir, f"{step}_net_G.pth"))
+        torch.save(self.netD.state_dict(), os.path.join(self.save_dir, f"{step}_net_D.pth"))
+        print(f"💾 Checkpoint saved at step {step}")
 
-    def load_networks(self, epoch):
+    def load_networks(self, step):
         loaded = False
-        target_filepath_G = os.path.join(self.save_dir, f"{epoch}_net_G.pth")
-        target_filepath_D = os.path.join(self.save_dir, f"{epoch}_net_D.pth")
+        target_filepath_G = os.path.join(self.save_dir, f"{step}_net_G.pth")
+        target_filepath_D = os.path.join(self.save_dir, f"{step}_net_D.pth")
 
         if os.path.exists(target_filepath_G):
             try:
@@ -658,7 +658,7 @@ class Zi2ZiModel:
                 print(f"Error loading {target_filepath_D}: {e}")
 
         if loaded:
-            print(f"✅ Model {epoch} loaded successfully")
+            print(f"✅ Model {step} loaded successfully")
         return loaded
 
     def _initialize_unmatched_weights(self, model, loaded_state_dict):

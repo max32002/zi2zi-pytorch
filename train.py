@@ -89,6 +89,7 @@ def train(args):
 
     # --- Training Loop ---
     start_time = time.time()
+    last_batch_time = start_time  # 初始化上一個 batch 的時間
     print(f"Starting training from epoch {start_epoch}...")
 
     for epoch in range(start_epoch, args.epoch):
@@ -97,7 +98,9 @@ def train(args):
 
         for batch_id, batch_data in enumerate(dataloader):
             current_step_time = time.time()
-            
+            batch_time_diff = current_step_time - last_batch_time  # 計算與上一個 batch 的時間差
+            last_batch_time = current_step_time  # 更新上一個 batch 的時間
+
             labels, image_B, image_A = batch_data
             model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
             model.set_input(model_input_data)
@@ -107,10 +110,21 @@ def train(args):
 
             if batch_id % 100 == 0:
                 elapsed_batch_time = time.time() - current_step_time
-                total_elapsed_time = time.time() - start_time
+                total_elapsed_time_seconds = time.time() - start_time
+                total_elapsed_hours = int(total_elapsed_time_seconds // 3600)
+                total_elapsed_minutes = int((total_elapsed_time_seconds % 3600) // 60)
+                total_elapsed_seconds = int(total_elapsed_time_seconds % 60)
+
+                time_str = ""
+                if total_elapsed_hours > 0:
+                    time_str += f"{total_elapsed_hours}h "
+                if total_elapsed_minutes > 0:
+                    time_str += f"{total_elapsed_minutes}m "
+                time_str += f"{total_elapsed_seconds}s"
+
                 print(
                     f"Epoch: [{epoch:2d}], Batch: [{batch_id:4d}/{total_batches:4d}] "
-                    f" | Time/Batch: {elapsed_batch_time:.2f}s | Total Time: {total_elapsed_time:.0f}\n"
+                    f" | Time/Batch: {elapsed_batch_time:.2f}s | Batch Diff: {batch_time_diff:.2f}s | Total Time: {time_str}\n"
                     f" d_loss: {losses['d_loss']:.4f}, g_loss:  {losses['g_loss']:.4f}, "
                     f"const_loss: {losses['const_loss']:.4f}, l1_loss: {losses['l1_loss']:.4f}, fm_loss: {losses['fm_loss']:.4f}, perc_loss: {losses['perceptual_loss']:.4f}"
                 )
@@ -118,9 +132,7 @@ def train(args):
             # --- Checkpointing ---
             if global_steps % args.checkpoint_steps == 0:
                 if global_steps >= args.checkpoint_steps_after:
-                    print(f"\nSaving checkpoint at step {global_steps}...")
-                    model.save_networks(global_steps) # Save with step label
-                    print(f"Checkpoint saved.")
+                    model.save_networks(global_steps)
 
                     # --- Clean up old checkpoints (Optional: only keep last) ---
                     if args.checkpoint_only_last:
