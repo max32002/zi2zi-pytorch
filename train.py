@@ -79,7 +79,7 @@ def train(args):
         print(f"Resumed model from step/epoch: {args.resume}")
         # If loading optimizer/scheduler state, you'd need to load those too and potentially update start_epoch/global_steps
         model_loaded = model.load_networks(args.resume)
-        if not model_loaded
+        if not model_loaded:
             return
 
     train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'), input_nc=args.input_nc)
