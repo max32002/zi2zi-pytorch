@@ -11,11 +11,9 @@ from torch.utils.data import DataLoader
 from data import DatasetFromObj
 from model import Zi2ZiModel
 
-
 def ensure_dir(path):
     """確保目錄存在，不存在則建立"""
     os.makedirs(path, exist_ok=True)
-
 
 def clear_google_drive_trash(drive_service):
     """清空 Google Drive 垃圾桶"""
@@ -25,9 +23,6 @@ def clear_google_drive_trash(drive_service):
             # print("Google Drive 垃圾桶已清空。")
         except Exception as e:
             print(f"清空 Google Drive 垃圾桶時發生錯誤：{e}")
-    # else:
-    #     print("drive_service is None")
-
 
 def setup_google_drive_service():
     """設定 Google Drive 服務"""
@@ -43,7 +38,6 @@ def setup_google_drive_service():
     except Exception as e:
         print(f"設定 Google Drive 服務時發生錯誤：{e}")
         return None
-
 
 def train(args):
     """訓練主函數"""
@@ -84,7 +78,9 @@ def train(args):
     if args.resume:
         print(f"Resumed model from step/epoch: {args.resume}")
         # If loading optimizer/scheduler state, you'd need to load those too and potentially update start_epoch/global_steps
-        model.load_networks(args.resume)
+        model_loaded = model.load_networks(args.resume)
+        if not model_loaded
+            return
 
     train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'), input_nc=args.input_nc)
     dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
