@@ -89,7 +89,6 @@ def train(args):
 
     # --- Training Loop ---
     start_time = time.time()
-    last_batch_time = start_time  # 初始化上一個 batch 的時間
     print(f"Starting training from epoch {start_epoch}...")
 
     for epoch in range(start_epoch, args.epoch):
@@ -98,8 +97,6 @@ def train(args):
 
         for batch_id, batch_data in enumerate(dataloader):
             current_step_time = time.time()
-            batch_time_diff = current_step_time - last_batch_time  # 計算與上一個 batch 的時間差
-            last_batch_time = current_step_time  # 更新上一個 batch 的時間
 
             labels, image_B, image_A = batch_data
             model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
@@ -124,7 +121,7 @@ def train(args):
 
                 print(
                     f"Epoch: [{epoch:2d}], Batch: [{batch_id:4d}/{total_batches:4d}] "
-                    f" | Time/Batch: {elapsed_batch_time:.2f}s | Batch Diff: {batch_time_diff:.2f}s | Total Time: {time_str}\n"
+                    f" | Time/Batch: {elapsed_batch_time:.2f}s | Total Time: {time_str}\n"
                     f" d_loss: {losses['d_loss']:.4f}, g_loss:  {losses['g_loss']:.4f}, "
                     f"const_loss: {losses['const_loss']:.4f}, l1_loss: {losses['l1_loss']:.4f}, fm_loss: {losses['fm_loss']:.4f}, perc_loss: {losses['perceptual_loss']:.4f}"
                 )
