@@ -1,8 +1,8 @@
 import functools
 import math
 import os
-import sys
 import subprocess
+import sys
 from typing import List, Union
 
 import cv2
@@ -19,6 +19,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torchvision.models import VGG16_Weights
 
 from utils.init_net import init_net
+
 
 class SelfAttention(nn.Module):
     def __init__(self, channels):

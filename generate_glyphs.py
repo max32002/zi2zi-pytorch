@@ -1,12 +1,12 @@
+import argparse
+import logging
 import os
 import shutil
-import logging
-import argparse
-from PIL import Image, ImageDraw, ImageFont
 
 import cv2  # OpenCV
+import freetype  # For TTF font handling
 import numpy as np
-import freetype # For TTF font handling
+from PIL import Image, ImageDraw, ImageFont
 
 # 設定日誌記錄
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

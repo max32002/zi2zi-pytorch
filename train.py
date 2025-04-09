@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from data import DatasetFromObj
 from model import Zi2ZiModel
 
+
 def ensure_dir(path):
     """確保目錄存在，不存在則建立"""
     os.makedirs(path, exist_ok=True)
@@ -89,11 +90,10 @@ def train(args):
 
     # --- Training Loop ---
     start_time = time.time()
-    print(f"Starting training from epoch {start_epoch}...")
+    print(f"Starting training from epoch {start_epoch}/{args.epoch - 1}...")
 
     for epoch in range(start_epoch, args.epoch):
         epoch_start_time = time.time()
-        print(f"\n--- Epoch {epoch}/{args.epoch - 1} ---")
 
         for batch_id, batch_data in enumerate(dataloader):
             current_step_time = time.time()
@@ -106,7 +106,6 @@ def train(args):
             global_steps += 1
 
             if batch_id % 100 == 0:
-                elapsed_batch_time = time.time() - current_step_time
                 total_elapsed_time_seconds = time.time() - start_time
                 total_elapsed_hours = int(total_elapsed_time_seconds // 3600)
                 total_elapsed_minutes = int((total_elapsed_time_seconds % 3600) // 60)
@@ -120,8 +119,7 @@ def train(args):
                 time_str += f"{total_elapsed_seconds}s"
 
                 print(
-                    f"Epoch: [{epoch:2d}], Batch: [{batch_id:4d}/{total_batches:4d}] "
-                    f" | Time/Batch: {elapsed_batch_time:.2f}s | Total Time: {time_str}\n"
+                    f"Epoch: [{epoch:3d}], Batch: [{batch_id:4d}/{total_batches:4d}] | Total Time: {time_str}\n"
                     f" d_loss: {losses['d_loss']:.4f}, g_loss:  {losses['g_loss']:.4f}, "
                     f"const_loss: {losses['const_loss']:.4f}, l1_loss: {losses['l1_loss']:.4f}, fm_loss: {losses['fm_loss']:.4f}, perc_loss: {losses['perceptual_loss']:.4f}"
                 )
@@ -140,12 +138,12 @@ def train(args):
                                     os.remove(filepath)
                         clear_google_drive_trash(drive_service)
                 else:
-                    print(f"\nCheckpoint step {global_steps} reached, but saving starts after step {args.checkpoint_steps_after}.")
+                    print(f"Checkpoint step {global_steps} reached, but saving starts after step {args.checkpoint_steps_after}.")
 
 
         # --- End of Epoch ---
         epoch_time = time.time() - epoch_start_time
-        print(f"\n--- End of Epoch {epoch} --- Time: {epoch_time:.2f}s ---")
+        print(f"--- End of Epoch {epoch} --- Time: {epoch_time:.1f}s ---")
 
         # Update Learning Rate Schedulers
         model.scheduler_G.step()
@@ -161,7 +159,7 @@ def train(args):
     print("Final model saved.")
 
     total_training_time = time.time() - start_time
-    print(f"Total Training Time: {total_training_time:.2f} seconds")
+    print(f"Total Training Time: {total_training_time:.1f} seconds")
 
 
 if __name__ == '__main__':
