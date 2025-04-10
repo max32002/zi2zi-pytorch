@@ -267,7 +267,7 @@ class UNetGenerator(nn.Module):
         _, encoded = self.model(x, style)
         return encoded
 
-class Discriminator(nn.Module): 
+class Discriminator(nn.Module):
     def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, blur=False):
         super(Discriminator, self).__init__()
 
@@ -276,7 +276,6 @@ class Discriminator(nn.Module):
         padw = 1
         sequence = [
             nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw)),
-            #nn.LeakyReLU(0.2, True)
             nn.SiLU(inplace=True)
         ]
 
@@ -289,14 +288,14 @@ class Discriminator(nn.Module):
             sequence += [
                 nn.utils.spectral_norm(conv),
                 norm_layer(ndf * nf_mult),
-                #nn.LeakyReLU(0.2, True)
                 nn.SiLU(inplace=True)
             ]
 
         self.model = nn.Sequential(*sequence)
 
-        self.output_conv = nn.utils.spectral_norm(
-            nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)
+        self.output_conv = nn.Sequential(
+            nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)),
+            nn.Tanh()  # ✅ 防止 logits 爆炸
         )
 
         self.category_pool = nn.AdaptiveAvgPool2d((4, 4))
@@ -330,18 +329,6 @@ class CategoryLoss(nn.Module):
         target = self.emb(labels)
         return self.loss(category_logits, target)
 
-class CategoryLoss(nn.Module):
-    def __init__(self, category_num):
-        super(CategoryLoss, self).__init__()
-        emb = nn.Embedding(category_num, category_num)
-        emb.weight.data = torch.eye(category_num)
-        self.emb = emb
-        self.loss = nn.BCEWithLogitsLoss()
-
-    def forward(self, category_logits, labels):
-        target = self.emb(labels)
-        return self.loss(category_logits, target)
-
 class PerceptualLoss(nn.Module):
     def __init__(self):
         super(PerceptualLoss, self).__init__()
@@ -350,22 +337,17 @@ class PerceptualLoss(nn.Module):
         self.slice2 = nn.Sequential(*list(vgg[4:9]))  # Conv2_2 (Input: 64 channels -> 128 channels)
         self.slice3 = nn.Sequential(*list(vgg[9:16])) # Conv3_3 (Input: 128 channels -> 256 channels)
         self.slice4 = nn.Sequential(*list(vgg[16:23]))# Conv4_3 (Input: 256 channels -> 512 channels)
-
         for param in self.parameters():
             param.requires_grad = False
 
     def forward(self, x, y):
-        """將灰階 (1 通道) 轉換為 RGB (3 通道)，再傳入 VGG 模型"""
         if x.shape[1] == 1:
             x = x.repeat(1, 3, 1, 1)  # (N, 1, H, W) -> (N, 3, H, W)
             y = y.repeat(1, 3, 1, 1)
-
-        # 確保輸入尺寸符合 VGG 預期
         x1, y1 = self.slice1(x), self.slice1(y)  # (N, 64, H, W)
         x2, y2 = self.slice2(x1), self.slice2(y1)  # (N, 128, H, W)
         x3, y3 = self.slice3(x2), self.slice3(y2)  # (N, 256, H, W)
         x4, y4 = self.slice4(x3), self.slice4(y3)  # (N, 512, H, W)
-
         loss = (
             nn.functional.l1_loss(x1, y1) +
             nn.functional.l1_loss(x2, y2) +
@@ -505,7 +487,7 @@ class Zi2ZiModel:
     def setup(self):
         if self.norm_type == "batch":
             norm_layer = nn.BatchNorm2d
-        else:  # 預設或 instance
+        else:
             norm_layer = nn.InstanceNorm2d
 
         self.netG = UNetGenerator(
@@ -582,6 +564,9 @@ class Zi2ZiModel:
         if use_autocast:
             with torch.amp.autocast(device_type='cuda'):
                 d_loss, cat_loss_d = self.loss_module.backward_D(self.real_A, self.real_B, self.fake_B, self.labels)
+                if torch.isnan(d_loss) or torch.isinf(d_loss):
+                    print("❌ d_loss contains NaN/Inf. Skipping D update.")
+                    return None
                 self.scaler_D.scale(d_loss).backward()
                 self.scaler_D.unscale_(self.optimizer_D)
                 torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
@@ -589,13 +574,12 @@ class Zi2ZiModel:
                 self.scaler_D.update()
         else:
             d_loss, cat_loss_d = self.loss_module.backward_D(self.real_A, self.real_B, self.fake_B, self.labels)
+            if torch.isnan(d_loss) or torch.isinf(d_loss):
+                print("❌ d_loss contains NaN/Inf. Skipping D update.")
+                return None
             d_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
             self.optimizer_D.step()
-
-        if torch.isnan(d_loss):
-            print("判別器損失為 NaN，停止訓練。")
-            return
 
         # --- Generator ---
         self.set_requires_grad(self.netD, False)
@@ -607,6 +591,9 @@ class Zi2ZiModel:
                     self.real_A, self.real_B, self.fake_B,
                     self.encoded_real_A, self.encoded_fake_B, self.labels
                 )
+                if torch.isnan(g_loss) or torch.isinf(g_loss):
+                    print("❌ g_loss contains NaN/Inf. Skipping G update.")
+                    return None
                 self.scaler_G.scale(g_loss).backward()
                 self.scaler_G.unscale_(self.optimizer_G)
                 torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
@@ -617,6 +604,9 @@ class Zi2ZiModel:
                 self.real_A, self.real_B, self.fake_B,
                 self.encoded_real_A, self.encoded_fake_B, self.labels
             )
+            if torch.isnan(g_loss) or torch.isinf(g_loss):
+                print("❌ g_loss contains NaN/Inf. Skipping G update.")
+                return None
             g_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
             self.optimizer_G.step()
@@ -661,41 +651,45 @@ class Zi2ZiModel:
         target_filepath_G = os.path.join(self.save_dir, f"{step}_net_G.pth")
         target_filepath_D = os.path.join(self.save_dir, f"{step}_net_D.pth")
 
+        # --- Generator ---
         if os.path.exists(target_filepath_G):
+            loaded = True
             try:
-                self.netG.load_state_dict(torch.load(target_filepath_G, map_location=self.device), strict=False)
-                loaded = True
+                state_dict_G = torch.load(target_filepath_G, map_location=self.device)
+                self.netG.load_state_dict(state_dict_G, strict=False)
             except Exception as e:
-                print(f"Error loading {target_filepath_G}: {e}")
+                print(f"❌ Error loading Generator: {e}")
         else:
-            print(f"File not found: {target_filepath_G}")
+            print(f"⚠️ Generator checkpoint not found: {target_filepath_G}")
 
+        # --- Discriminator ---
         if os.path.exists(target_filepath_D):
             try:
-                state_dict = torch.load(target_filepath_D, map_location=self.device)
-                self.netD.load_state_dict(state_dict, strict=False)  # 忽略形狀不匹配的層
-                self._initialize_unmatched_weights(self.netD, state_dict)  # 初始化未載入的層
+                state_dict_D = torch.load(target_filepath_D, map_location=self.device)
+                self.netD.load_state_dict(state_dict_D, strict=False)
+                self._initialize_unmatched_weights(self.netD, state_dict_D, model_name="netD")
             except Exception as e:
-                print(f"Error loading {target_filepath_D}: {e}")
+                print(f"❌ Error loading Discriminator: {e}")
+        else:
+            print(f"⚠️ Discriminator checkpoint not found: {target_filepath_D}")
 
         if loaded:
             print(f"✅ Model {step} loaded successfully")
         return loaded
 
-    def _initialize_unmatched_weights(self, model, loaded_state_dict):
-        """ 初始化 `netD` 中未載入的層 """
+    def _initialize_unmatched_weights(self, model, loaded_state_dict, model_name="Model"):
         for name, param in model.named_parameters():
-            if name not in loaded_state_dict:
-                print(f"🔄 Re-initializing layer: {name}")
+            if name not in loaded_state_dict or torch.isnan(param).any() or torch.isinf(param).any():
+                print(f"🔄 Re-initializing param: {model_name}.{name}")
                 if "weight" in name:
-                    nn.init.kaiming_normal_(param, mode='fan_out', nonlinearity='leaky_relu')
+                    nn.init.kaiming_normal_(param.data, mode='fan_out', nonlinearity='leaky_relu')
                 elif "bias" in name:
-                    nn.init.constant_(param, 0)
+                    nn.init.constant_(param.data, 0)
 
         for name, buffer in model.named_buffers():
-            if name not in loaded_state_dict:
-                print(f"🔄 Re-initializing buffer: {name}")
-                buffer.zero_()
+            if name not in loaded_state_dict or torch.isnan(buffer).any() or torch.isinf(buffer).any():
+                print(f"🔄 Re-initializing buffer: {model_name}.{name}")
+                buffer.data.zero_()
 
     def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> np.ndarray:
         """將張量轉換為 OpenCV 圖像"""
