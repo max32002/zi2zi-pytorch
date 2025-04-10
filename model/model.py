@@ -126,8 +126,8 @@ class FiLMModulation(nn.Module):
 
     def forward(self, x, style):
         gamma_beta = self.film(style)  # (B, 2 * C)
-        gamma, beta = gamma_beta.chunk(2, dim=1)  # (B, C), (B, C)
-        gamma = gamma.unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
+        gamma, beta = gamma_beta.chunk(2, dim=1)
+        gamma = gamma.unsqueeze(-1).unsqueeze(-1)
         beta = beta.unsqueeze(-1).unsqueeze(-1)
         return gamma * x + beta
 
@@ -160,8 +160,9 @@ class UnetSkipConnectionBlock(nn.Module):
         uprelu = nn.SiLU(inplace=True)
         upnorm = norm_layer(outer_nc)
 
+        # Adjusted upconv channels according to skip connection (add-based)
         if outermost:
-            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
+            upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             self.down = nn.Sequential(downconv)
             self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
         elif innermost:
@@ -172,7 +173,8 @@ class UnetSkipConnectionBlock(nn.Module):
                 self.transformer_block = TransformerBlock(inner_nc)
             self.film = FiLMModulation(inner_nc, embedding_dim)
         else:
-            upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
+            # changed from inner_nc * 2 → inner_nc (for add-based skip)
+            upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             self.down = nn.Sequential(downrelu, downconv, downnorm)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_dropout:
@@ -202,7 +204,7 @@ class UnetSkipConnectionBlock(nn.Module):
             decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
             if self.res_skip:
                 decoded = self.res_skip(decoded)
-            return torch.cat([x, decoded], 1), encoded.contiguous().view(x.shape[0], -1)
+            return x + decoded, encoded.contiguous().view(x.shape[0], -1)
         else:
             sub_output, encoded_real_A = self.submodule(encoded, style)
             decoded = self.up(sub_output)
@@ -212,44 +214,43 @@ class UnetSkipConnectionBlock(nn.Module):
             if self.outermost:
                 return decoded, encoded_real_A
             else:
-                return torch.cat([x, decoded], 1), encoded_real_A
+                return x + decoded, encoded_real_A
 
 class UNetGenerator(nn.Module):
-    def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=32,
+    def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=64,
                  embedding_num=40, embedding_dim=128,
                  norm_layer=nn.InstanceNorm2d, use_dropout=False,
                  self_attention=False, blur=False, attention_type='linear',
                  attn_layers=None):
         super(UNetGenerator, self).__init__()
+
         if attn_layers is None:
             attn_layers = []
 
         unet_block = UnetSkipConnectionBlock(
-            ngf * 8, ngf * 8, input_nc=None, submodule=None,
+            ngf * 8, ngf * 8, submodule=None, innermost=True,
             norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim,
-            self_attention=self_attention, blur=blur, innermost=True,
-            use_transformer=True, attention_type=attention_type,
-            attn_layers=attn_layers
-        )
+            use_transformer=True, self_attention=self_attention,
+            blur=blur, attention_type=attention_type, attn_layers=attn_layers)
 
         for i in range(num_downs - 5):
             unet_block = UnetSkipConnectionBlock(
-                ngf * 8, ngf * 8, input_nc=None, submodule=unet_block,
-                norm_layer=norm_layer, layer=i+2, use_dropout=use_dropout,
-                self_attention=self_attention, blur=blur, attention_type=attention_type,
-                attn_layers=attn_layers
-            )
+                ngf * 8, ngf * 8, submodule=unet_block,
+                norm_layer=norm_layer, layer=i + 2, use_dropout=use_dropout,
+                self_attention=self_attention, blur=blur,
+                attention_type=attention_type, attn_layers=attn_layers)
 
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, submodule=unet_block, norm_layer=norm_layer, layer=5)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, submodule=unet_block, norm_layer=norm_layer, layer=6)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, submodule=unet_block, norm_layer=norm_layer, layer=7)
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, submodule=unet_block, norm_layer=norm_layer, layer=5,
+                                             self_attention=self_attention, blur=blur, attention_type=attention_type, attn_layers=attn_layers)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, submodule=unet_block, norm_layer=norm_layer, layer=6,
+                                             self_attention=self_attention, blur=blur, attention_type=attention_type, attn_layers=attn_layers)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, submodule=unet_block, norm_layer=norm_layer, layer=7,
+                                             self_attention=self_attention, blur=blur, attention_type=attention_type, attn_layers=attn_layers)
 
-        self.model = UnetSkipConnectionBlock(
-            output_nc, ngf, input_nc=input_nc, submodule=unet_block,
-            norm_layer=norm_layer, layer=8, outermost=True,
-            self_attention=self_attention, blur=blur,
-            attention_type=attention_type, attn_layers=attn_layers
-        )
+        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block,
+                                             outermost=True, norm_layer=norm_layer, layer=8,
+                                             self_attention=self_attention, blur=blur,
+                                             attention_type=attention_type, attn_layers=attn_layers)
 
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
 
@@ -258,13 +259,13 @@ class UNetGenerator(nn.Module):
 
     def forward(self, x, style_or_label=None):
         style = self._prepare_style(style_or_label)
-        fake_B, encoded_real_A = self.model(x, style)
-        return fake_B, encoded_real_A
+        fake_B, encoded = self.model(x, style)
+        return fake_B, encoded
 
     def encode(self, x, style_or_label=None):
         style = self._prepare_style(style_or_label)
-        _, encoded_real_A = self.model(x, style)
-        return encoded_real_A
+        _, encoded = self.model(x, style)
+        return encoded
 
 class Discriminator(nn.Module): 
     def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, blur=False):
