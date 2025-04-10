@@ -20,6 +20,17 @@ from torchvision.models import VGG16_Weights
 
 from utils.init_net import init_net
 
+def get_unicode_codepoint(char):
+    if sys.maxunicode >= 0x10FFFF:
+        # 直接處理單一字元
+        return ord(char)
+    else:
+        # 針對 UCS-2 需要特別處理代理對
+        if len(char) == 2:
+            high, low = map(ord, char)
+            return (high - 0xD800) * 0x400 + (low - 0xDC00) + 0x10000
+        else:
+            return ord(char)
 
 class SelfAttention(nn.Module):
     def __init__(self, channels):
@@ -40,48 +51,42 @@ class SelfAttention(nn.Module):
         out = torch.bmm(proj_value, attention.permute(0, 2, 1)).view(B, C, H, W)
         return self.gamma * out + x
 
-def get_unicode_codepoint(char):
-    if sys.maxunicode >= 0x10FFFF:
-        # 直接處理單一字元
-        return ord(char)
-    else:
-        # 針對 UCS-2 需要特別處理代理對
-        if len(char) == 2:
-            high, low = map(ord, char)
-            return (high - 0xD800) * 0x400 + (low - 0xDC00) + 0x10000
-        else:
-            return ord(char)
-
 class ResSkip(nn.Module):
-    def __init__(self, channels):
-        super(ResSkip, self).__init__()
-        self.conv = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        self.norm = nn.GroupNorm(8, channels)  # **改用 GroupNorm 來減少 BatchNorm 依賴**
-        self.relu = nn.SiLU(inplace=True)  # **用 SiLU 替換 ReLU，減少死神經元問題**
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+        self.norm1 = nn.BatchNorm2d(out_channels)
+        self.act1 = nn.SiLU()
+        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        self.norm2 = nn.BatchNorm2d(out_channels)
+        self.act2 = nn.SiLU()
 
     def forward(self, x):
-        return x + self.relu(self.norm(self.conv(x)))
+        identity = x
+        out = self.act1(self.norm1(self.conv1(x)))
+        out = self.act2(self.norm2(self.conv2(out)))
+        return out + identity
 
 class TransformerBlock(nn.Module):
-    def __init__(self, channels, num_heads=4, dropout=0.1, eps=1e-5):
-        super(TransformerBlock, self).__init__()
-        self.attention = nn.MultiheadAttention(channels, num_heads, dropout=dropout, batch_first=True)
-        self.norm1 = nn.LayerNorm(channels, eps=eps)
+    def __init__(self, in_dim, heads=4):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(embed_dim=in_dim, num_heads=heads, batch_first=True)
         self.ffn = nn.Sequential(
-            nn.Linear(channels, channels * 4),
-            nn.ReLU(),
-            nn.Linear(channels * 4, channels)
+            nn.Linear(in_dim, in_dim * 4),
+            nn.SiLU(),
+            nn.Linear(in_dim * 4, in_dim)
         )
-        self.norm2 = nn.LayerNorm(channels, eps=eps)
+        self.norm1 = nn.LayerNorm(in_dim)
+        self.norm2 = nn.LayerNorm(in_dim)
 
     def forward(self, x):
         B, C, H, W = x.shape
-        x_flat = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
-        attn_output, _ = self.attention(x_flat, x_flat, x_flat)
-        x_flat = self.norm1(x_flat + attn_output)
-        ffn_output = self.ffn(x_flat)
-        x_flat = self.norm2(x_flat + ffn_output)
-        return x_flat.reshape(B, H, W, C).permute(0, 3, 1, 2)
+        x_flat = x.view(B, C, -1).permute(0, 2, 1)
+        attn_out, _ = self.attn(x_flat, x_flat, x_flat)
+        x = self.norm1(x_flat + attn_out)
+        ffn_out = self.ffn(x)
+        x = self.norm2(x + ffn_out)
+        return x.permute(0, 2, 1).view(B, C, H, W)
 
 class LinearAttention(nn.Module):
     def __init__(self, channels, key_channels=None):
@@ -113,133 +118,143 @@ class LinearAttention(nn.Module):
         out = self.out_proj(out)
         return self.gamma * out + x
 
+class FiLMModulation(nn.Module):
+    def __init__(self, in_channels, style_dim):
+        super(FiLMModulation, self).__init__()
+        self.film = nn.Linear(style_dim, in_channels * 2)
+        nn.init.kaiming_normal_(self.film.weight, nonlinearity='linear')
+
+    def forward(self, x, style):
+        gamma_beta = self.film(style)  # (B, 2 * C)
+        gamma, beta = gamma_beta.chunk(2, dim=1)  # (B, C), (B, C)
+        gamma = gamma.unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
+        beta = beta.unsqueeze(-1).unsqueeze(-1)
+        return gamma * x + beta
+
 class UnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc, input_nc=None, submodule=None,
                  norm_layer=nn.InstanceNorm2d, layer=0, embedding_dim=128,
-                 use_dropout=False, self_attention=False, attention_type='linear', blur=False, outermost=False, innermost=False, use_transformer=False):
+                 use_dropout=False, self_attention=False, attention_type='linear',
+                 blur=False, outermost=False, innermost=False, use_transformer=False,
+                 attn_layers=None):
         super(UnetSkipConnectionBlock, self).__init__()
-
         self.outermost = outermost
         self.innermost = innermost
-        use_bias = norm_layer != nn.BatchNorm2d
+        self.layer = layer
+        self.attn_layers = attn_layers or []
 
+        use_bias = norm_layer != nn.BatchNorm2d
         if input_nc is None:
             input_nc = outer_nc
-        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4, stride=2, padding=1, bias=use_bias)
+
+        # Select stride and kernel
+        kernel_size = 3 if innermost else 4
+        stride = 1 if innermost else 2
+        padding = 1
+
+        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=kernel_size, stride=stride, padding=padding, bias=use_bias)
         nn.init.kaiming_normal_(downconv.weight, nonlinearity='leaky_relu')
-        downrelu = nn.LeakyReLU(0.2, True)
+
+        downrelu = nn.SiLU(inplace=True)
         downnorm = norm_layer(inner_nc)
-        uprelu = nn.ReLU(inplace=False)
+        uprelu = nn.SiLU(inplace=True)
         upnorm = norm_layer(outer_nc)
 
         if outermost:
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
-            nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downconv)
             self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
         elif innermost:
-            upconv = nn.ConvTranspose2d(inner_nc + embedding_dim, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
-            nn.init.kaiming_normal_(upconv.weight)
+            upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             self.down = nn.Sequential(downrelu, downconv)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_transformer:
-                self.transformer_block = TransformerBlock(inner_nc) #增加transformer block
+                self.transformer_block = TransformerBlock(inner_nc)
+            self.film = FiLMModulation(inner_nc, embedding_dim)
         else:
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
-            nn.init.kaiming_normal_(upconv.weight)
             self.down = nn.Sequential(downrelu, downconv, downnorm)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_dropout:
                 self.up.add_module("dropout", nn.Dropout(0.3))
 
         self.submodule = submodule
-        if self_attention and layer in [1, 3, 6]:
-            if attention_type == 'linear':
-                self.attn_block = LinearAttention(inner_nc)
-            elif attention_type == 'self':
-                self.attn_block = SelfAttention(inner_nc)
-            else:
-                raise ValueError(f"Invalid attention_type: {attention_type}. Must be 'linear' or 'self'.")
+
+        if self_attention and self.layer in self.attn_layers:
+            self.attn_block = LinearAttention(inner_nc) if attention_type == 'linear' else SelfAttention(inner_nc)
         else:
             self.attn_block = None
-        self.res_skip = ResSkip(outer_nc) if not outermost and not innermost else None
 
-    def _process_submodule(self, encoded, style):
-        if self.submodule:
-            return self.submodule(encoded, style)
-        else:
-            return encoded, None
-
-    def _interpolate_if_needed(self, decoded, x):
-        return F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False) if decoded.shape[2:] != x.shape[2:] else decoded
+        self.res_skip = ResSkip(outer_nc, outer_nc) if not outermost and layer >= 4 else None
 
     def forward(self, x, style=None):
-        encoded_pre_attn = self.down(x)
-
-        encoded_post_attn = encoded_pre_attn
+        encoded = self.down(x)
         if self.attn_block:
-            encoded_post_attn = self.attn_block(encoded_pre_attn)
+            encoded = self.attn_block(encoded)
 
         if self.innermost:
-            if hasattr(self, 'transformer_block'): #檢查是否包含transformer block
-                encoded_post_attn = self.transformer_block(encoded_post_attn) #加入transformer block
+            if hasattr(self, 'transformer_block'):
+                encoded = self.transformer_block(encoded)
             if style is not None:
-                encoded_post_attn = torch.cat([style.view(style.shape[0], style.shape[1], 1, 1), encoded_post_attn], dim=1)
-            decoded = self.up(encoded_post_attn)
-            decoded = self._interpolate_if_needed(decoded, x)
+                encoded = self.film(encoded, style)
+
+            decoded = self.up(encoded)
+            decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
             if self.res_skip:
                 decoded = self.res_skip(decoded)
-            return torch.cat([x, decoded], 1), encoded_post_attn.view(x.shape[0], -1)
+            return torch.cat([x, decoded], 1), encoded.contiguous().view(x.shape[0], -1)
         else:
-            sub_output, encoded_real_A = self._process_submodule(encoded_post_attn, style)
-
+            sub_output, encoded_real_A = self.submodule(encoded, style)
             decoded = self.up(sub_output)
-            decoded = self._interpolate_if_needed(decoded, x)
-
-            decoded_modulated_up = decoded
-            if self.res_skip and not self.outermost:
-                decoded_modulated_up = self.res_skip(decoded_modulated_up)
-
+            decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
+            if self.res_skip:
+                decoded = self.res_skip(decoded)
             if self.outermost:
-                return decoded_modulated_up, encoded_real_A
+                return decoded, encoded_real_A
             else:
-                return torch.cat([x, decoded_modulated_up], 1), encoded_real_A
+                return torch.cat([x, decoded], 1), encoded_real_A
 
 class UNetGenerator(nn.Module):
-    def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
-                 norm_layer=nn.InstanceNorm2d, use_dropout=False, self_attention=False, blur=False, attention_type='linear'):
+    def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=32,
+                 embedding_num=40, embedding_dim=128,
+                 norm_layer=nn.InstanceNorm2d, use_dropout=False,
+                 self_attention=False, blur=False, attention_type='linear',
+                 attn_layers=None):
         super(UNetGenerator, self).__init__()
-        
-        # 最底層（innermost），負責風格嵌入處理
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None,
-                                            norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim,
-                                            self_attention=self_attention, blur=blur, innermost=True, use_transformer=True, attention_type=attention_type)
+        if attn_layers is None:
+            attn_layers = []
 
-        # 中間層
-        for index in range(num_downs - 5):
-            unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block,
-                                                norm_layer=norm_layer, layer=index+2, use_dropout=use_dropout,
-                                                self_attention=self_attention, blur=blur, attention_type=attention_type)
+        unet_block = UnetSkipConnectionBlock(
+            ngf * 8, ngf * 8, input_nc=None, submodule=None,
+            norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim,
+            self_attention=self_attention, blur=blur, innermost=True,
+            use_transformer=True, attention_type=attention_type,
+            attn_layers=attn_layers
+        )
 
-        # 上層（恢復影像解析度）
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block,
-                                            norm_layer=norm_layer, layer=5, self_attention=self_attention, blur=blur, attention_type=attention_type)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block,
-                                            norm_layer=norm_layer, layer=6, self_attention=self_attention, blur=blur, attention_type=attention_type)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block,
-                                            norm_layer=norm_layer, layer=7, self_attention=self_attention, blur=blur, attention_type=attention_type)
+        for i in range(num_downs - 5):
+            unet_block = UnetSkipConnectionBlock(
+                ngf * 8, ngf * 8, input_nc=None, submodule=unet_block,
+                norm_layer=norm_layer, layer=i+2, use_dropout=use_dropout,
+                self_attention=self_attention, blur=blur, attention_type=attention_type,
+                attn_layers=attn_layers
+            )
 
-        # 最外層（outermost）
-        self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block,
-                                            norm_layer=norm_layer, layer=8, self_attention=self_attention, blur=blur, outermost=True, attention_type=attention_type)
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, submodule=unet_block, norm_layer=norm_layer, layer=5)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, submodule=unet_block, norm_layer=norm_layer, layer=6)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, submodule=unet_block, norm_layer=norm_layer, layer=7)
+
+        self.model = UnetSkipConnectionBlock(
+            output_nc, ngf, input_nc=input_nc, submodule=unet_block,
+            norm_layer=norm_layer, layer=8, outermost=True,
+            self_attention=self_attention, blur=blur,
+            attention_type=attention_type, attn_layers=attn_layers
+        )
 
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
 
     def _prepare_style(self, style_or_label):
-        if style_or_label is not None and 'LongTensor' in style_or_label.type():
-            return self.embedder(style_or_label)
-        else:
-            return style_or_label
+        return self.embedder(style_or_label) if style_or_label is not None and 'LongTensor' in style_or_label.type() else style_or_label
 
     def forward(self, x, style_or_label=None):
         style = self._prepare_style(style_or_label)
@@ -260,25 +275,29 @@ class Discriminator(nn.Module):
         padw = 1
         sequence = [
             nn.utils.spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw)),
-            nn.LeakyReLU(0.2, True)
+            #nn.LeakyReLU(0.2, True)
+            nn.SiLU(inplace=True)
         ]
 
         nf_mult = 1
         for n in range(1, 4):  # deeper layers
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
+            conv = nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult,
+                             kernel_size=kw, stride=2, padding=padw, bias=use_bias)
             sequence += [
-                nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult,
-                                                 kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
+                nn.utils.spectral_norm(conv),
                 norm_layer(ndf * nf_mult),
-                nn.LeakyReLU(0.2, True)
+                #nn.LeakyReLU(0.2, True)
+                nn.SiLU(inplace=True)
             ]
 
-        # PatchGAN 的最後一層：1x1 conv => output 一張 (N,1,H,W) 真偽圖
         self.model = nn.Sequential(*sequence)
-        self.output_conv = nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)
 
-        # 類別分類仍然可以做：用全域特徵 + 線性分類
+        self.output_conv = nn.utils.spectral_norm(
+            nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)
+        )
+
         self.category_pool = nn.AdaptiveAvgPool2d((4, 4))
         self.category_fc = nn.Linear(ndf * nf_mult * 4 * 4, embedding_num)
 
@@ -291,11 +310,10 @@ class Discriminator(nn.Module):
             input = self.gaussian_blur(input)
 
         features = self.model(input)
-        binary_logits = self.output_conv(features)  # shape: (N, 1, H', W')，PatchGAN 判別圖
+        binary_logits = self.output_conv(features)  # (N, 1, H', W')
 
-        pooled = self.category_pool(features)
-        pooled = pooled.view(input.size(0), -1)
-        category_logits = self.category_fc(pooled)  # shape: (N, embedding_num)
+        pooled = self.category_pool(features).view(input.size(0), -1)
+        category_logits = self.category_fc(pooled)
 
         return binary_logits, category_logits
 
@@ -498,6 +516,7 @@ class Zi2ZiModel:
             embedding_dim=self.embedding_dim,
             self_attention=self.self_attention,
             attention_type=self.attention_type,
+            attn_layers=[4, 6],
             blur=self.g_blur,
             norm_layer=norm_layer
         )
