@@ -121,7 +121,7 @@ def train(args):
                 print(
                     f"Epoch: [{epoch:3d}], Batch: [{batch_id:4d}/{total_batches:4d}] | Total Time: {time_str}\n"
                     f" d_loss: {losses['d_loss']:.4f}, g_loss:  {losses['g_loss']:.4f}, "
-                    f"const_loss: {losses['const_loss']:.4f}, l1_loss: {losses['l1_loss']:.4f}, fm_loss: {losses['fm_loss']:.4f}, perc_loss: {losses['perceptual_loss']:.4f}"
+                    f"const_loss: {losses['const_loss']:.4f}, l1_loss: {losses['l1_loss']:.4f}, fm_loss: {losses['fm_loss']:.4f}, perc_loss: {losses['perceptual_loss']:.4f}, style_loss: {losses['style_cls_loss']:.4f}"
                 )
 
             # --- Checkpointing ---

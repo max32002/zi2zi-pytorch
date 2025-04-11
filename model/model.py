@@ -201,14 +201,19 @@ class UnetSkipConnectionBlock(nn.Module):
                 encoded = self.film(encoded, style)
 
             decoded = self.up(encoded)
-            decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
+            if decoded.shape[2:] != x.shape[2:]:
+                decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
             if self.res_skip:
                 decoded = self.res_skip(decoded)
-            return x + decoded, encoded.contiguous().view(x.shape[0], -1)
+
+            # 使用全域平均池化來取得 bottleneck 表徵
+            style_feat = encoded.mean(dim=(2, 3))  # shape: (B, C)
+            return x + decoded, style_feat
         else:
             sub_output, encoded_real_A = self.submodule(encoded, style)
             decoded = self.up(sub_output)
-            decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
+            if decoded.shape[2:] != x.shape[2:]:
+                decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
             if self.res_skip:
                 decoded = self.res_skip(decoded)
             if self.outermost:
@@ -254,18 +259,33 @@ class UNetGenerator(nn.Module):
 
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
 
+        self.style_classifier = nn.Sequential(
+            nn.LayerNorm(ngf * 8),
+            nn.Linear(ngf * 8, embedding_num)
+        )
+
+        self.style_embedder = nn.Sequential(
+            nn.LayerNorm(ngf * 8),
+            nn.Linear(ngf * 8, embedding_dim),
+            nn.SiLU()
+        )
+
     def _prepare_style(self, style_or_label):
         return self.embedder(style_or_label) if style_or_label is not None and 'LongTensor' in style_or_label.type() else style_or_label
 
     def forward(self, x, style_or_label=None):
         style = self._prepare_style(style_or_label)
-        fake_B, encoded = self.model(x, style)
-        return fake_B, encoded
+        fake_B, style_feat = self.model(x, style)  # style_feat: (B, C)
+
+        style_cls_pred = self.style_classifier(style_feat)   # 分類
+        style_emb = self.style_embedder(style_feat)          # 嵌入向量
+
+        return fake_B, style_cls_pred, style_emb
 
     def encode(self, x, style_or_label=None):
         style = self._prepare_style(style_or_label)
-        _, encoded = self.model(x, style)
-        return encoded
+        _, style_feat = self.model(x, style)
+        return self.style_embedder(style_feat)
 
 class Discriminator(nn.Module):
     def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, blur=False):
@@ -367,6 +387,7 @@ class Zi2ZiLoss:
         self.category = CategoryLoss(model.embedding_num).to(device)
         self.perceptual = PerceptualLoss().to(device)
         self.feature_match = nn.L1Loss().to(device)
+        self.style_cls_loss = nn.CrossEntropyLoss().to(device)
 
         # Weights
         self.lambda_L1 = lambda_L1
@@ -375,6 +396,7 @@ class Zi2ZiLoss:
         self.lambda_fm = lambda_fm
         self.lambda_perc = lambda_perc
         self.lambda_gp = lambda_gp
+        self.lambda_style_cls = 1
 
     def compute_gradient_penalty(self, real, fake):
         alpha = torch.rand(real.size(0), 1, 1, 1, device=self.device)
@@ -413,7 +435,7 @@ class Zi2ZiLoss:
         total_D_loss = d_loss_adv + cat_loss + gp
         return total_D_loss, cat_loss
 
-    def backward_G(self, real_A, real_B, fake_B, encoded_real_A, encoded_fake_B, labels):
+    def backward_G(self, real_A, real_B, fake_B, encoded_real_A, encoded_fake_B, labels, style_pred):
         real_AB = torch.cat([real_A, real_B], 1)
         fake_AB = torch.cat([real_A, fake_B], 1)
 
@@ -426,8 +448,10 @@ class Zi2ZiLoss:
         cat_loss = self.category(fake_cat, labels) * self.lambda_cat
         fm_loss = self.feature_matching_loss(real_AB, fake_AB) * self.lambda_fm
         perc_loss = self.perceptual(fake_B, real_B) * self.lambda_perc
+        style_cls_loss = self.style_cls_loss(style_pred, labels) * self.lambda_style_cls
 
-        total_G_loss = g_loss_adv + const_loss + l1_loss + cat_loss + fm_loss + perc_loss
+        total_G_loss = g_loss_adv + const_loss + l1_loss + cat_loss + fm_loss + perc_loss + style_cls_loss
+
         return total_G_loss, {
             'const_loss': const_loss,
             'l1_loss': l1_loss,
@@ -435,7 +459,9 @@ class Zi2ZiLoss:
             'cat_loss': cat_loss,
             'fm_loss': fm_loss,
             'perceptual_loss': perc_loss,
+            'style_cls_loss': style_cls_loss,
         }
+
 
 class Zi2ZiModel:
     def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128, ngf=64, ndf=64,
@@ -543,7 +569,7 @@ class Zi2ZiModel:
         self.real_B = data['B'].to(self.device) # Target font image
 
     def forward(self):
-        self.fake_B, self.encoded_real_A = self.netG(self.real_A, self.labels)
+        self.fake_B, self.style_pred, self.encoded_real_A = self.netG(self.real_A, self.labels)
         self.encoded_fake_B = self.netG.encode(self.fake_B, self.labels)
 
     def set_requires_grad(self, nets, requires_grad=False):
@@ -589,7 +615,7 @@ class Zi2ZiModel:
             with torch.amp.autocast(device_type='cuda'):
                 g_loss, losses = self.loss_module.backward_G(
                     self.real_A, self.real_B, self.fake_B,
-                    self.encoded_real_A, self.encoded_fake_B, self.labels
+                    self.encoded_real_A, self.encoded_fake_B, self.labels, self.style_pred
                 )
                 if torch.isnan(g_loss) or torch.isinf(g_loss):
                     print("❌ g_loss contains NaN/Inf. Skipping G update.")
