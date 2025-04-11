@@ -163,22 +163,21 @@ class UnetSkipConnectionBlock(nn.Module):
         uprelu = nn.SiLU(inplace=True)
         upnorm = norm_layer(outer_nc)
 
-        upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        upconv = nn.Conv2d(inner_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias)
-        nn.init.kaiming_normal_(upconv.weight, nonlinearity='leaky_relu')
-
         if outermost:
+            upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             self.down = nn.Sequential(downconv)
-            self.up = nn.Sequential(uprelu, upsample, upconv, nn.Tanh())
+            self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
         elif innermost:
+            upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             self.down = nn.Sequential(downrelu, downconv)
-            self.up = nn.Sequential(uprelu, upsample, upconv, upnorm)
+            self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_transformer:
                 self.transformer_block = TransformerBlock(inner_nc)
             self.film = FiLMModulation(inner_nc, embedding_dim)
         else:
+            upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             self.down = nn.Sequential(downrelu, downconv, downnorm)
-            self.up = nn.Sequential(uprelu, upsample, upconv, upnorm)
+            self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_dropout:
                 self.up.add_module("dropout", nn.Dropout(0.3))
 
