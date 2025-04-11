@@ -65,6 +65,10 @@ class ResSkip(nn.Module):
         identity = x
         out = self.act1(self.norm1(self.conv1(x)))
         out = self.act2(self.norm2(self.conv2(out)))
+        if identity.shape != out.shape:
+            identity = F.interpolate(identity, size=out.shape[2:], mode='bilinear', align_corners=False)
+            if identity.shape[1] != out.shape[1]:
+                identity = nn.Conv2d(identity.shape[1], out.shape[1], 1)(identity)
         return out + identity
 
 class TransformerBlock(nn.Module):
@@ -133,7 +137,7 @@ class FiLMModulation(nn.Module):
 
 class UnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc, input_nc=None, submodule=None,
-                 norm_layer=nn.InstanceNorm2d, layer=0, embedding_dim=128,
+                 norm_layer=nn.InstanceNorm2d, layer=0, embedding_dim=64,
                  use_dropout=False, self_attention=False, attention_type='linear',
                  blur=False, outermost=False, innermost=False, use_transformer=False,
                  attn_layers=None):
@@ -147,7 +151,6 @@ class UnetSkipConnectionBlock(nn.Module):
         if input_nc is None:
             input_nc = outer_nc
 
-        # Select stride and kernel
         kernel_size = 3 if innermost else 4
         stride = 1 if innermost else 2
         padding = 1
@@ -160,25 +163,29 @@ class UnetSkipConnectionBlock(nn.Module):
         uprelu = nn.SiLU(inplace=True)
         upnorm = norm_layer(outer_nc)
 
-        # Adjusted upconv channels according to skip connection (add-based)
+        upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+        upconv = nn.Conv2d(inner_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias)
+        nn.init.kaiming_normal_(upconv.weight, nonlinearity='leaky_relu')
+
         if outermost:
-            upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             self.down = nn.Sequential(downconv)
-            self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
+            self.up = nn.Sequential(uprelu, upsample, upconv, nn.Tanh())
         elif innermost:
-            upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             self.down = nn.Sequential(downrelu, downconv)
-            self.up = nn.Sequential(uprelu, upconv, upnorm)
+            self.up = nn.Sequential(uprelu, upsample, upconv, upnorm)
             if use_transformer:
                 self.transformer_block = TransformerBlock(inner_nc)
             self.film = FiLMModulation(inner_nc, embedding_dim)
         else:
-            # changed from inner_nc * 2 → inner_nc (for add-based skip)
-            upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
             self.down = nn.Sequential(downrelu, downconv, downnorm)
-            self.up = nn.Sequential(uprelu, upconv, upnorm)
+            self.up = nn.Sequential(uprelu, upsample, upconv, upnorm)
             if use_dropout:
                 self.up.add_module("dropout", nn.Dropout(0.3))
+
+            if layer >= 4:
+                self.film = FiLMModulation(inner_nc, embedding_dim)
+            else:
+                self.film = None
 
         self.submodule = submodule
 
@@ -191,14 +198,16 @@ class UnetSkipConnectionBlock(nn.Module):
 
     def forward(self, x, style=None):
         encoded = self.down(x)
+
         if self.attn_block:
             encoded = self.attn_block(encoded)
+
+        if hasattr(self, 'film') and self.film is not None and style is not None:
+            encoded = self.film(encoded, style)
 
         if self.innermost:
             if hasattr(self, 'transformer_block'):
                 encoded = self.transformer_block(encoded)
-            if style is not None:
-                encoded = self.film(encoded, style)
 
             decoded = self.up(encoded)
             if decoded.shape[2:] != x.shape[2:]:
@@ -206,24 +215,23 @@ class UnetSkipConnectionBlock(nn.Module):
             if self.res_skip:
                 decoded = self.res_skip(decoded)
 
-            # 使用全域平均池化來取得 bottleneck 表徵
-            style_feat = encoded.mean(dim=(2, 3))  # shape: (B, C)
+            style_feat = encoded.mean(dim=(2, 3))  # Global avg pool
             return x + decoded, style_feat
         else:
-            sub_output, encoded_real_A = self.submodule(encoded, style)
+            sub_output, style_feat = self.submodule(encoded, style)
             decoded = self.up(sub_output)
             if decoded.shape[2:] != x.shape[2:]:
                 decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
             if self.res_skip:
                 decoded = self.res_skip(decoded)
             if self.outermost:
-                return decoded, encoded_real_A
+                return decoded, style_feat
             else:
-                return x + decoded, encoded_real_A
+                return x + decoded, style_feat
 
 class UNetGenerator(nn.Module):
     def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=64,
-                 embedding_num=40, embedding_dim=128,
+                 embedding_num=40, embedding_dim=64,
                  norm_layer=nn.InstanceNorm2d, use_dropout=False,
                  self_attention=False, blur=False, attention_type='linear',
                  attn_layers=None):
@@ -269,6 +277,8 @@ class UNetGenerator(nn.Module):
             nn.Linear(ngf * 8, embedding_dim),
             nn.SiLU()
         )
+        nn.init.xavier_normal_(self.style_classifier[1].weight)
+        nn.init.xavier_normal_(self.style_embedder[1].weight)
 
     def _prepare_style(self, style_or_label):
         return self.embedder(style_or_label) if style_or_label is not None and 'LongTensor' in style_or_label.type() else style_or_label
@@ -464,7 +474,7 @@ class Zi2ZiLoss:
 
 
 class Zi2ZiModel:
-    def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128, ngf=64, ndf=64,
+    def __init__(self, input_nc=1, embedding_num=40, embedding_dim=64, ngf=64, ndf=64,
                  Lconst_penalty=10, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  self_attention=False, attention_type='linear', residual_block=False,
@@ -683,6 +693,7 @@ class Zi2ZiModel:
             try:
                 state_dict_G = torch.load(target_filepath_G, map_location=self.device)
                 self.netG.load_state_dict(state_dict_G, strict=False)
+                self._initialize_unmatched_weights(self.netG, state_dict_G, model_name="netG")
             except Exception as e:
                 print(f"❌ Error loading Generator: {e}")
         else:
@@ -704,17 +715,18 @@ class Zi2ZiModel:
         return loaded
 
     def _initialize_unmatched_weights(self, model, loaded_state_dict, model_name="Model"):
+        model_state = model.state_dict()
         for name, param in model.named_parameters():
-            if name not in loaded_state_dict or torch.isnan(param).any() or torch.isinf(param).any():
-                print(f"🔄 Re-initializing param: {model_name}.{name}")
+            if name not in loaded_state_dict or model_state[name].shape != loaded_state_dict[name].shape:
+                print(f"🔄 Re-initializing param (shape mismatch or missing): {model_name}.{name}")
                 if "weight" in name:
                     nn.init.kaiming_normal_(param.data, mode='fan_out', nonlinearity='leaky_relu')
                 elif "bias" in name:
                     nn.init.constant_(param.data, 0)
 
         for name, buffer in model.named_buffers():
-            if name not in loaded_state_dict or torch.isnan(buffer).any() or torch.isinf(buffer).any():
-                print(f"🔄 Re-initializing buffer: {model_name}.{name}")
+            if name not in loaded_state_dict or model_state[name].shape != loaded_state_dict[name].shape:
+                print(f"🔄 Re-initializing buffer (shape mismatch or missing): {model_name}.{name}")
                 buffer.data.zero_()
 
     def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> np.ndarray:
