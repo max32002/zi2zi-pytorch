@@ -481,8 +481,7 @@ class Zi2ZiModel:
                  weight_decay = 1e-5, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
                  gradient_clip=0.5, norm_type="instance"):
 
-        self.norm_type = norm_type  # 保存 norm_type
-
+        self.norm_type = norm_type
         if is_training:
             self.use_dropout = True
         else:
