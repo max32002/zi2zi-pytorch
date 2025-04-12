@@ -79,7 +79,9 @@ def infer(args):
         gpu_ids=args.gpu_ids, 
         self_attention=args.self_attention,
         attention_type=args.attention_type,
-        residual_block=args.residual_block, is_training=False
+        residual_block=args.residual_block, 
+        up_mode=args.up_mode,
+        is_training=False
     )
     model.print_networks(True)
     if not model.load_networks(args.resume):
@@ -146,5 +148,6 @@ if __name__ == '__main__':
     parser.add_argument('--src_font_y_offset', type=int, default=0)
     parser.add_argument('--src_txt', type=str, default='')
     parser.add_argument('--src_txt_file', type=str, default=None)
+    parser.add_argument('--up_mode', type=str, default="conv", help="切換 Upsample / ConvTranspose2d")
     args = parser.parse_args()
     infer(args)

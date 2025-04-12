@@ -70,7 +70,7 @@ def train(args):
         d_blur=args.d_blur,
         lr=args.lr,
         norm_type=args.norm_type,
-        use_checkpoint=args.use_checkpoint
+        up_mode=args.up_mode
     )
 
     model.print_networks(True)
@@ -121,7 +121,7 @@ def train(args):
                 print(
                     f"Epoch: [{epoch:3d}], Batch: [{batch_id:4d}/{total_batches:4d}] | Total Time: {time_str}\n"
                     f" d_loss: {losses['d_loss']:.4f}, g_loss:  {losses['g_loss']:.4f}, "
-                    f"const_loss: {losses['const_loss']:.4f}, l1_loss: {losses['l1_loss']:.4f}, fm_loss: {losses['fm_loss']:.4f}, perc_loss: {losses['perceptual_loss']:.4f}, style_loss: {losses['style_cls_loss']:.4f}"
+                    f"const_loss: {losses['const_loss']:.4f}, l1_loss: {losses['l1_loss']:.4f}, fm_loss: {losses['fm_loss']:.4f}, perc_loss: {losses['perceptual_loss']:.4f}"
                 )
 
             # --- Checkpointing ---
@@ -189,6 +189,6 @@ if __name__ == '__main__':
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
     parser.add_argument('--self_attention', action='store_true')
     parser.add_argument('--use_autocast', action="store_true", help='Enable autocast for mixed precision training')
-    parser.add_argument('--use_checkpoint', action='store_true', help='Enable gradient checkpointing to reduce memory usage')
+    parser.add_argument('--up_mode', type=str, default="conv", help="切換 Upsample / ConvTranspose2d")
     args = parser.parse_args()
     train(args)
