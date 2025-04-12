@@ -54,21 +54,17 @@ class SelfAttention(nn.Module):
 class ResSkip(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
-        self.norm1 = nn.BatchNorm2d(out_channels)
-        self.act1 = nn.SiLU()
-        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
-        self.norm2 = nn.BatchNorm2d(out_channels)
-        self.act2 = nn.SiLU()
+        self.depthwise = nn.Conv2d(in_channels, in_channels, 3, padding=1, groups=in_channels)
+        self.pointwise = nn.Conv2d(in_channels, out_channels, 1)
+        self.norm = nn.InstanceNorm2d(out_channels)
+        self.act = nn.SiLU()
+        self.skip = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
 
     def forward(self, x):
-        identity = x
-        out = self.act1(self.norm1(self.conv1(x)))
-        out = self.act2(self.norm2(self.conv2(out)))
-        if identity.shape != out.shape:
-            identity = F.interpolate(identity, size=out.shape[2:], mode='bilinear', align_corners=False)
-            if identity.shape[1] != out.shape[1]:
-                identity = nn.Conv2d(identity.shape[1], out.shape[1], 1)(identity)
+        identity = self.skip(x)
+        out = self.depthwise(x)
+        out = self.pointwise(out)
+        out = self.act(self.norm(out))
         return out + identity
 
 class TransformerBlock(nn.Module):
@@ -233,8 +229,9 @@ class UNetGenerator(nn.Module):
                  embedding_num=40, embedding_dim=64,
                  norm_layer=nn.InstanceNorm2d, use_dropout=False,
                  self_attention=False, blur=False, attention_type='linear',
-                 attn_layers=None):
+                 attn_layers=None, use_checkpoint=False):  
         super(UNetGenerator, self).__init__()
+        self.use_checkpoint = use_checkpoint  
 
         if attn_layers is None:
             attn_layers = []
@@ -282,14 +279,18 @@ class UNetGenerator(nn.Module):
     def _prepare_style(self, style_or_label):
         return self.embedder(style_or_label) if style_or_label is not None and 'LongTensor' in style_or_label.type() else style_or_label
 
+    def _forward_impl(self, x, style=None):
+        style = self._prepare_style(style)
+        fake_B, style_feat = self.model(x, style)  
+        style_cls_pred = self.style_classifier(style_feat)  
+        style_emb = self.style_embedder(style_feat)         
+        return fake_B, style_cls_pred, style_emb
+
     def forward(self, x, style_or_label=None):
         style = self._prepare_style(style_or_label)
-        fake_B, style_feat = self.model(x, style)  # style_feat: (B, C)
-
-        style_cls_pred = self.style_classifier(style_feat)   # 分類
-        style_emb = self.style_embedder(style_feat)          # 嵌入向量
-
-        return fake_B, style_cls_pred, style_emb
+        if self.use_checkpoint and self.training:
+            return torch.utils.checkpoint.checkpoint(self._forward_impl, x, style)
+        return self._forward_impl(x, style)
 
     def encode(self, x, style_or_label=None):
         style = self._prepare_style(style_or_label)
@@ -324,7 +325,7 @@ class Discriminator(nn.Module):
 
         self.output_conv = nn.Sequential(
             nn.utils.spectral_norm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)),
-            nn.Tanh()  # ✅ 防止 logits 爆炸
+            nn.Tanh()  # 
         )
 
         self.category_pool = nn.AdaptiveAvgPool2d((4, 4))
@@ -478,7 +479,7 @@ class Zi2ZiModel:
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  self_attention=False, attention_type='linear', residual_block=False,
                  weight_decay = 1e-5, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
-                 gradient_clip=0.5, norm_type="instance"):
+                 gradient_clip=0.5, norm_type="instance", use_checkpoint=False):
 
         self.norm_type = norm_type
         if is_training:
@@ -491,7 +492,8 @@ class Zi2ZiModel:
         self.L1_penalty = L1_penalty
 
         self.epoch = epoch
-        self.schedule = schedule
+        self.use_checkpoint = use_checkpoint
+
 
         self.save_dir = save_dir
         self.gpu_ids = gpu_ids
@@ -535,7 +537,8 @@ class Zi2ZiModel:
             attention_type=self.attention_type,
             attn_layers=[4, 6],
             blur=self.g_blur,
-            norm_layer=norm_layer
+            norm_layer=norm_layer,
+            use_checkpoint=self.use_checkpoint
         )
         self.netD = Discriminator(
             input_nc=2 * self.input_nc,
@@ -599,7 +602,7 @@ class Zi2ZiModel:
             with torch.amp.autocast(device_type='cuda'):
                 d_loss, cat_loss_d = self.loss_module.backward_D(self.real_A, self.real_B, self.fake_B, self.labels)
                 if torch.isnan(d_loss) or torch.isinf(d_loss):
-                    print("❌ d_loss contains NaN/Inf. Skipping D update.")
+                    print(" d_loss contains NaN/Inf. Skipping D update.")
                     return None
                 self.scaler_D.scale(d_loss).backward()
                 self.scaler_D.unscale_(self.optimizer_D)
@@ -609,7 +612,7 @@ class Zi2ZiModel:
         else:
             d_loss, cat_loss_d = self.loss_module.backward_D(self.real_A, self.real_B, self.fake_B, self.labels)
             if torch.isnan(d_loss) or torch.isinf(d_loss):
-                print("❌ d_loss contains NaN/Inf. Skipping D update.")
+                print(" d_loss contains NaN/Inf. Skipping D update.")
                 return None
             d_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.netD.parameters(), self.gradient_clip)
@@ -626,7 +629,7 @@ class Zi2ZiModel:
                     self.encoded_real_A, self.encoded_fake_B, self.labels, self.style_pred
                 )
                 if torch.isnan(g_loss) or torch.isinf(g_loss):
-                    print("❌ g_loss contains NaN/Inf. Skipping G update.")
+                    print(" g_loss contains NaN/Inf. Skipping G update.")
                     return None
                 self.scaler_G.scale(g_loss).backward()
                 self.scaler_G.unscale_(self.optimizer_G)
@@ -639,7 +642,7 @@ class Zi2ZiModel:
                 self.encoded_real_A, self.encoded_fake_B, self.labels
             )
             if torch.isnan(g_loss) or torch.isinf(g_loss):
-                print("❌ g_loss contains NaN/Inf. Skipping G update.")
+                print(" g_loss contains NaN/Inf. Skipping G update.")
                 return None
             g_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.netG.parameters(), self.gradient_clip)
@@ -678,7 +681,7 @@ class Zi2ZiModel:
 
         torch.save(self.netG.state_dict(), os.path.join(self.save_dir, f"{step}_net_G.pth"))
         torch.save(self.netD.state_dict(), os.path.join(self.save_dir, f"{step}_net_D.pth"))
-        print(f"💾 Checkpoint saved at step {step}")
+        print(f" Checkpoint saved at step {step}")
 
     def load_networks(self, step):
         loaded = False
@@ -693,9 +696,9 @@ class Zi2ZiModel:
                 self.netG.load_state_dict(state_dict_G, strict=False)
                 self._initialize_unmatched_weights(self.netG, state_dict_G, model_name="netG")
             except Exception as e:
-                print(f"❌ Error loading Generator: {e}")
+                print(f" Error loading Generator: {e}")
         else:
-            print(f"⚠️ Generator checkpoint not found: {target_filepath_G}")
+            print(f" Generator checkpoint not found: {target_filepath_G}")
 
         # --- Discriminator ---
         if os.path.exists(target_filepath_D):
@@ -704,19 +707,19 @@ class Zi2ZiModel:
                 self.netD.load_state_dict(state_dict_D, strict=False)
                 self._initialize_unmatched_weights(self.netD, state_dict_D, model_name="netD")
             except Exception as e:
-                print(f"❌ Error loading Discriminator: {e}")
+                print(f" Error loading Discriminator: {e}")
         else:
-            print(f"⚠️ Discriminator checkpoint not found: {target_filepath_D}")
+            print(f" Discriminator checkpoint not found: {target_filepath_D}")
 
         if loaded:
-            print(f"✅ Model {step} loaded successfully")
+            print(f" Model {step} loaded successfully")
         return loaded
 
     def _initialize_unmatched_weights(self, model, loaded_state_dict, model_name="Model"):
         model_state = model.state_dict()
         for name, param in model.named_parameters():
             if name not in loaded_state_dict or model_state[name].shape != loaded_state_dict[name].shape:
-                print(f"🔄 Re-initializing param (shape mismatch or missing): {model_name}.{name}")
+                print(f" Re-initializing param (shape mismatch or missing): {model_name}.{name}")
                 if "weight" in name:
                     nn.init.kaiming_normal_(param.data, mode='fan_out', nonlinearity='leaky_relu')
                 elif "bias" in name:
@@ -724,23 +727,20 @@ class Zi2ZiModel:
 
         for name, buffer in model.named_buffers():
             if name not in loaded_state_dict or model_state[name].shape != loaded_state_dict[name].shape:
-                print(f"🔄 Re-initializing buffer (shape mismatch or missing): {model_name}.{name}")
+                print(f" Re-initializing buffer (shape mismatch or missing): {model_name}.{name}")
                 buffer.data.zero_()
 
     def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> np.ndarray:
-        """將張量轉換為 OpenCV 圖像"""
         grid = vutils.make_grid(tensor)
         ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
         return ndarr
 
     def anti_aliasing(self, image, strength=1):
-        """抗鋸齒處理"""
         ksize = max(1, strength * 2 + 1)
         blurred = cv2.GaussianBlur(image, (ksize, ksize), 0)
         return blurred
 
     def process_image(self, image, crop_src_font, canvas_size, resize_canvas, anti_aliasing_strength, binary_image):
-        """處理圖像：裁剪、縮放、抗鋸齒、二值化"""
         if crop_src_font:
             image = image[0:canvas_size, 0:canvas_size]
             if resize_canvas > 0 and canvas_size != resize_canvas:
@@ -756,7 +756,6 @@ class Zi2ZiModel:
         return image
 
     def save_image_to_disk(self, image, label_dir, filename, image_ext):
-        """將圖像儲存到磁碟，並根據需要轉換為 SVG"""
         save_path = os.path.join(label_dir, f"{filename}.{image_ext}")
         if image_ext == "svg":
             save_path_pgm = os.path.join(label_dir, f"{filename}.pgm")
@@ -768,7 +767,6 @@ class Zi2ZiModel:
 
     def sample(self, batch_data, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas=256,
                filename_rule="seq", binary_image=True, anti_aliasing_strength=1, image_ext="png"):
-        """生成並儲存圖像樣本"""
         with torch.no_grad():
             labels, image_B, image_A = batch_data
             model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
@@ -778,7 +776,7 @@ class Zi2ZiModel:
             output_images = torch.cat([self.fake_B, self.real_B], 3)
             for i, (label, image_tensor) in enumerate(zip(batch_data[0], output_images)):
                 label_dir = os.path.join(basename, str(label.item()))
-                os.makedirs(label_dir, exist_ok=True)  # 確保目錄存在
+                os.makedirs(label_dir, exist_ok=True)  
 
                 if filename_rule == "seq":
                     filename = str(i)
@@ -790,10 +788,9 @@ class Zi2ZiModel:
                     elif filename_rule == "unicode_int":
                         filename = str(get_unicode_codepoint(src_char_list[i]))
                 else:
-                    filename = str(i)  # 如果 src_char_list 不存在或長度不夠，使用序列號
+                    filename = str(i)  
 
                 opencv_image = cv2.cvtColor(self.save_image(image_tensor), cv2.COLOR_BGR2GRAY)
                 processed_image = self.process_image(opencv_image, crop_src_font, canvas_size, resize_canvas,
                                                     anti_aliasing_strength, binary_image)
                 self.save_image_to_disk(processed_image, label_dir, filename, image_ext)
-

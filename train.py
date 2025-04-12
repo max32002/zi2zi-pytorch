@@ -69,7 +69,8 @@ def train(args):
         g_blur=args.g_blur,
         d_blur=args.d_blur,
         lr=args.lr,
-        norm_type=args.norm_type
+        norm_type=args.norm_type,
+        use_checkpoint=args.use_checkpoint
     )
 
     model.print_networks(True)
@@ -78,7 +79,6 @@ def train(args):
     global_steps = 0    
     if args.resume:
         print(f"Resumed model from step/epoch: {args.resume}")
-        # If loading optimizer/scheduler state, you'd need to load those too and potentially update start_epoch/global_steps
         model_loaded = model.load_networks(args.resume)
         if not model_loaded:
             return
@@ -189,5 +189,6 @@ if __name__ == '__main__':
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
     parser.add_argument('--self_attention', action='store_true')
     parser.add_argument('--use_autocast', action="store_true", help='Enable autocast for mixed precision training')
+    parser.add_argument('--use_checkpoint', action='store_true', help='Enable gradient checkpointing to reduce memory usage')
     args = parser.parse_args()
     train(args)
