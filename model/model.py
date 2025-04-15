@@ -88,6 +88,19 @@ class TransformerBlock(nn.Module):
         x = self.norm2(x + ffn_out)
         return x.permute(0, 2, 1).view(B, C, H, W)
 
+class FiLMModulation(nn.Module):
+    def __init__(self, in_channels, style_dim):
+        super(FiLMModulation, self).__init__()
+        self.film = nn.Linear(style_dim, in_channels * 2)
+        nn.init.kaiming_normal_(self.film.weight, nonlinearity='linear')
+
+    def forward(self, x, style):
+        gamma_beta = self.film(style)
+        gamma, beta = gamma_beta.chunk(2, dim=1) 
+        gamma = gamma.unsqueeze(-1).unsqueeze(-1)
+        beta = beta.unsqueeze(-1).unsqueeze(-1)
+        return gamma * x + beta
+
 class LinearAttention(nn.Module):
     def __init__(self, channels, key_channels=None):
         super(LinearAttention, self).__init__()
@@ -117,19 +130,6 @@ class LinearAttention(nn.Module):
         out = normalized_out.view(B, self.value_channels, H, W)
         out = self.out_proj(out)
         return self.gamma * out + x
-
-class FiLMModulation(nn.Module):
-    def __init__(self, in_channels, style_dim):
-        super(FiLMModulation, self).__init__()
-        self.film = nn.Linear(style_dim, in_channels * 2)
-        nn.init.kaiming_normal_(self.film.weight, nonlinearity='linear')
-
-    def forward(self, x, style):
-        gamma_beta = self.film(style)
-        gamma, beta = gamma_beta.chunk(2, dim=1) 
-        gamma = gamma.unsqueeze(-1).unsqueeze(-1)
-        beta = beta.unsqueeze(-1).unsqueeze(-1)
-        return gamma * x + beta
 
 class UnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc, input_nc=None, submodule=None,
@@ -171,6 +171,13 @@ class UnetSkipConnectionBlock(nn.Module):
                     upnorm
                 )
                 nn.init.kaiming_normal_(upconv[1].weight)
+            elif self.up_mode == 'pixelshuffle':
+                upconv = nn.Sequential(
+                    nn.Conv2d(inner_nc * 2 if not innermost else inner_nc, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    nn.PixelShuffle(2),
+                    upnorm
+                )
+                nn.init.kaiming_normal_(upconv[0].weight)
             else:
                 raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
             self.down = nn.Sequential(downconv)
@@ -186,6 +193,13 @@ class UnetSkipConnectionBlock(nn.Module):
                     upnorm
                 )
                 nn.init.kaiming_normal_(upconv[1].weight)
+            elif self.up_mode == 'pixelshuffle':
+                upconv = nn.Sequential(
+                    nn.Conv2d(inner_nc, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    nn.PixelShuffle(2),
+                    upnorm
+                )
+                nn.init.kaiming_normal_(upconv[0].weight)
             else:
                 raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
             self.down = nn.Sequential(downrelu, downconv)
@@ -204,6 +218,13 @@ class UnetSkipConnectionBlock(nn.Module):
                     upnorm
                 )
                 nn.init.kaiming_normal_(upconv[1].weight)
+            elif self.up_mode == 'pixelshuffle':
+                upconv = nn.Sequential(
+                    nn.Conv2d(inner_nc * 2, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    nn.PixelShuffle(2),
+                    upnorm
+                )
+                nn.init.kaiming_normal_(upconv[0].weight)
             else:
                 raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
             self.down = nn.Sequential(downrelu, downconv, downnorm)
@@ -219,13 +240,12 @@ class UnetSkipConnectionBlock(nn.Module):
         else:
             self.attn_block = None
 
-        self.res_skip = ResSkip(outer_nc, outer_nc) if not outermost and not innermost and layer >= 4 else None
+        self.res_skip = ResSkip(outer_nc, outer_nc) if not outermost and not innermost and layer in [4, 5, 6, 7] else None
 
     def forward(self, x, style=None):
+        if hasattr(self, 'attn_block') and self.attn_block is not None:
+            x = self.attn_block(x)
         encoded = self.down(x)
-        if self.attn_block:
-            encoded = self.attn_block(encoded)
-
         if self.innermost:
             if hasattr(self, 'transformer_block'):
                 encoded = self.transformer_block(encoded)
@@ -390,8 +410,29 @@ class PerceptualLoss(nn.Module):
         )
         return loss
 
+class EdgeAwareLoss(nn.Module):
+    def __init__(self):
+        super(EdgeAwareLoss, self).__init__()
+        self.l1 = nn.L1Loss()
+
+    def get_edge(self, img):
+        img_np = img.detach().cpu().numpy()
+        edges = []
+        for i in range(img_np.shape[0]):
+            gray = img_np[i, 0] * 255.0
+            gray = np.clip(gray, 0, 255).astype(np.uint8)
+            edge = cv2.Canny(gray, 100, 200) / 255.0
+            edges.append(edge)
+        edge_tensor = torch.from_numpy(np.stack(edges)).to(dtype=img.dtype, device=img.device).unsqueeze(1)
+        return edge_tensor
+
+    def forward(self, pred, target):
+        pred_edge = self.get_edge(pred)
+        target_edge = self.get_edge(target)
+        return self.l1(pred_edge, target_edge)
+
 class Zi2ZiLoss:
-    def __init__(self, model, device, lambda_L1=100, lambda_const=10, lambda_cat=1, lambda_fm=10, lambda_perc=10, lambda_gp=10):
+    def __init__(self, model, device, lambda_L1=100, lambda_const=10, lambda_cat=1, lambda_fm=10, lambda_perc=10, lambda_gp=10, lambda_edge=5):
         self.model = model
         self.device = device
 
@@ -401,6 +442,7 @@ class Zi2ZiLoss:
         self.category = CategoryLoss(model.embedding_num).to(device)
         self.perceptual = PerceptualLoss().to(device)
         self.feature_match = nn.L1Loss().to(device)
+        self.edge_loss = EdgeAwareLoss().to(device)
 
         # Weights
         self.lambda_L1 = lambda_L1
@@ -409,6 +451,7 @@ class Zi2ZiLoss:
         self.lambda_fm = lambda_fm
         self.lambda_perc = lambda_perc
         self.lambda_gp = lambda_gp
+        self.lambda_edge = lambda_edge  # 新增 edge loss 權重
 
     def compute_gradient_penalty(self, real, fake):
         alpha = torch.rand(real.size(0), 1, 1, 1, device=self.device)
@@ -457,18 +500,20 @@ class Zi2ZiLoss:
         g_loss_adv = -torch.mean(F.logsigmoid(fake_D - real_D))
         const_loss = self.const(encoded_real_A, encoded_fake_B) * self.lambda_const
         l1_loss = self.L1(fake_B, real_B) * self.lambda_L1
+        perc_loss = self.perceptual(fake_B, real_B) * self.lambda_perc
         cat_loss = self.category(fake_cat, labels) * self.lambda_cat
         fm_loss = self.feature_matching_loss(real_AB, fake_AB) * self.lambda_fm
-        perc_loss = self.perceptual(fake_B, real_B) * self.lambda_perc
+        edge_loss = self.edge_loss(fake_B, real_B) * self.lambda_edge
 
-        total_G_loss = g_loss_adv + const_loss + l1_loss + cat_loss + fm_loss + perc_loss
+        total_G_loss = g_loss_adv + const_loss + l1_loss + perc_loss + cat_loss + fm_loss + edge_loss
         return total_G_loss, {
-            'const_loss': const_loss,
-            'l1_loss': l1_loss,
-            'g_adv': g_loss_adv,
-            'cat_loss': cat_loss,
-            'fm_loss': fm_loss,
-            'perceptual_loss': perc_loss,
+            "adv": g_loss_adv.item(),
+            "const": const_loss.item(),
+            "l1": l1_loss.item(),
+            "perc": perc_loss.item(),
+            "cat": cat_loss.item(),
+            "fm": fm_loss.item(),
+            "edge": edge_loss.item()
         }
 
 class Zi2ZiModel:
@@ -636,9 +681,9 @@ class Zi2ZiModel:
             self.optimizer_G.step()
 
         return {
-            'd_loss': d_loss.item(),
-            'g_loss': g_loss.item(),
-            **{k: v.item() for k, v in losses.items()}
+            'd_loss': d_loss.item() if isinstance(d_loss, torch.Tensor) else float(d_loss),
+            'g_loss': g_loss.item() if isinstance(g_loss, torch.Tensor) else float(g_loss),
+            **{k: v.item() if isinstance(v, torch.Tensor) else float(v) for k, v in losses.items()}
         }
 
     def set_requires_grad(self, nets, requires_grad=False):
