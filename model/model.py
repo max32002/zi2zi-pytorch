@@ -136,13 +136,14 @@ class UnetSkipConnectionBlock(nn.Module):
                  norm_layer=nn.InstanceNorm2d, layer=0, embedding_dim=64,
                  use_dropout=False, self_attention=False, attention_type='linear',
                  blur=False, outermost=False, innermost=False, use_transformer=False,
-                 attn_layers=None, up_mode='conv'):
+                 attn_layers=None, up_mode='conv', freeze_downsample=False):
         super(UnetSkipConnectionBlock, self).__init__()
         self.outermost = outermost
         self.innermost = innermost
         self.layer = layer
         self.attn_layers = attn_layers or []
         self.up_mode = up_mode
+        self.freeze_downsample = freeze_downsample
 
         use_bias = norm_layer != nn.BatchNorm2d
         if input_nc is None:
@@ -152,84 +153,56 @@ class UnetSkipConnectionBlock(nn.Module):
         stride = 1 if innermost else 2
         padding = 1
 
-        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=kernel_size, stride=stride, padding=padding, bias=use_bias)
-        nn.init.kaiming_normal_(downconv.weight, nonlinearity='leaky_relu')
+        self.downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=kernel_size, stride=stride, padding=padding, bias=use_bias)
+        nn.init.kaiming_normal_(self.downconv.weight, nonlinearity='leaky_relu')
 
-        downrelu = nn.SiLU(inplace=True)
-        downnorm = norm_layer(inner_nc)
-        uprelu = nn.SiLU(inplace=True)
-        upnorm = norm_layer(outer_nc)
+        self.downrelu = nn.SiLU(inplace=True)
+        self.downnorm = norm_layer(inner_nc)
+        self.uprelu = nn.SiLU(inplace=True)
+        self.upnorm = norm_layer(outer_nc)
 
         if outermost:
-            if self.up_mode == 'conv':
-                upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
-                nn.init.kaiming_normal_(upconv.weight)
-            elif self.up_mode == 'upsample':
-                upconv = nn.Sequential(
-                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-                    nn.Conv2d(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[1].weight)
-            elif self.up_mode == 'pixelshuffle':
-                upconv = nn.Sequential(
-                    nn.Conv2d(inner_nc * 2 if not innermost else inner_nc, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    nn.PixelShuffle(2),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[0].weight)
-            else:
-                raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
-            self.down = nn.Sequential(downconv)
-            self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
+            in_channels = inner_nc * 2
         elif innermost:
-            if self.up_mode == 'conv':
-                upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
-                nn.init.kaiming_normal_(upconv.weight)
-            elif self.up_mode == 'upsample':
-                upconv = nn.Sequential(
-                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-                    nn.Conv2d(inner_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[1].weight)
-            elif self.up_mode == 'pixelshuffle':
-                upconv = nn.Sequential(
-                    nn.Conv2d(inner_nc, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    nn.PixelShuffle(2),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[0].weight)
-            else:
-                raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
-            self.down = nn.Sequential(downrelu, downconv)
-            self.up = nn.Sequential(uprelu, upconv, upnorm)
+            in_channels = inner_nc
+        else:
+            in_channels = inner_nc * 2
+
+        if self.up_mode == 'conv':
+            self.upconv = nn.ConvTranspose2d(in_channels, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
+            nn.init.kaiming_normal_(self.upconv.weight)
+        elif self.up_mode == 'upsample':
+            self.upconv = nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                nn.Conv2d(in_channels, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                self.upnorm
+            )
+            nn.init.kaiming_normal_(self.upconv[1].weight)
+        elif self.up_mode == 'pixelshuffle':
+            self.upconv = nn.Sequential(
+                nn.Conv2d(in_channels, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                nn.PixelShuffle(2),
+                nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),  # << smoothing conv
+                self.upnorm
+            )
+            nn.init.kaiming_normal_(self.upconv[0].weight)
+            nn.init.kaiming_normal_(self.upconv[2].weight)
+        else:
+            raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv', 'upsample', or 'pixelshuffle'.")
+
+        # Layer logic
+        if outermost:
+            self.down = nn.Sequential(self.downconv)
+            self.up = nn.Sequential(self.uprelu, self.upconv, nn.Tanh())
+        elif innermost:
+            self.down = nn.Sequential(self.downrelu, self.downconv)
+            self.up = nn.Sequential(self.uprelu, self.upconv, self.upnorm)
             if use_transformer:
                 self.transformer_block = TransformerBlock(inner_nc)
             self.film = FiLMModulation(inner_nc, embedding_dim)
         else:
-            if self.up_mode == 'conv':
-                upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
-                nn.init.kaiming_normal_(upconv.weight)
-            elif self.up_mode == 'upsample':
-                upconv = nn.Sequential(
-                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-                    nn.Conv2d(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[1].weight)
-            elif self.up_mode == 'pixelshuffle':
-                upconv = nn.Sequential(
-                    nn.Conv2d(inner_nc * 2, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    nn.PixelShuffle(2),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[0].weight)
-            else:
-                raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
-            self.down = nn.Sequential(downrelu, downconv, downnorm)
-            self.up = nn.Sequential(uprelu, upconv, upnorm)
-
+            self.down = nn.Sequential(self.downrelu, self.downconv, self.downnorm)
+            self.up = nn.Sequential(self.uprelu, self.upconv, self.upnorm)
             if use_dropout:
                 self.up.add_module("dropout", nn.Dropout(0.3))
 
@@ -240,7 +213,14 @@ class UnetSkipConnectionBlock(nn.Module):
         else:
             self.attn_block = None
 
-        self.res_skip = ResSkip(outer_nc, outer_nc) if not outermost and not innermost and layer in [4, 5, 6, 7] else None
+        if not outermost and not innermost and layer in [4, 5, 6, 7]:
+            self.res_skip = ResSkip(outer_nc, outer_nc) if hasattr(self, 'res_skip') else None
+
+        if self.freeze_downsample:
+            for param in self.downconv.parameters():
+                param.requires_grad = False
+            for param in self.downnorm.parameters():
+                param.requires_grad = False
 
     def forward(self, x, style=None):
         if hasattr(self, 'attn_block') and self.attn_block is not None:
@@ -249,12 +229,12 @@ class UnetSkipConnectionBlock(nn.Module):
         if self.innermost:
             if hasattr(self, 'transformer_block'):
                 encoded = self.transformer_block(encoded)
-            if hasattr(self, 'film') and self.film is not None:
+            if hasattr(self, 'film') and style is not None:
                 encoded = self.film(encoded, style)
             decoded = self.up(encoded)
             if decoded.shape[2:] != x.shape[2:]:
                 decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
-            if self.res_skip:
+            if hasattr(self, 'res_skip') and self.res_skip is not None:
                 decoded = self.res_skip(decoded)
             return torch.cat([x, decoded], 1), encoded.contiguous().view(x.shape[0], -1)
         else:
@@ -262,7 +242,7 @@ class UnetSkipConnectionBlock(nn.Module):
             decoded = self.up(sub_output)
             if decoded.shape[2:] != x.shape[2:]:
                 decoded = F.interpolate(decoded, size=x.shape[2:], mode='bilinear', align_corners=False)
-            if self.res_skip:
+            if hasattr(self, 'res_skip') and self.res_skip is not None:
                 decoded = self.res_skip(decoded)
             if self.outermost:
                 return decoded, encoded_real_A
@@ -325,7 +305,7 @@ class Discriminator(nn.Module):
     def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, blur=False):
         super(Discriminator, self).__init__()
 
-        use_bias = norm_layer != nn.BatchNorm2d
+        conv_bias = norm_layer != nn.BatchNorm2d
         kw = 4
         padw = 1
         sequence = [
@@ -338,7 +318,7 @@ class Discriminator(nn.Module):
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
             conv = nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult,
-                             kernel_size=kw, stride=2, padding=padw, bias=use_bias)
+                             kernel_size=kw, stride=2, padding=padw, bias=conv_bias)
             sequence += [
                 nn.utils.spectral_norm(conv),
                 norm_layer(ndf * nf_mult),
@@ -604,37 +584,13 @@ class Zi2ZiModel:
                                     lambda_const=self.Lconst_penalty,
                                     lambda_cat=self.Lcategory_penalty)
 
-    def set_train_eval_mode(self):
-        if self.is_training:
-            self.netG.train()
-            self.netD.train()
-            print("Model set to TRAIN mode.")
-        else:
-            self.netG.eval()
-            self.netD.eval()
-            print("Model set to EVAL mode.")
-
-    def set_input(self, data):
-        self.labels = data['label'].to(self.device)
-        self.real_A = data['A'].to(self.device) # Input font image
-        self.real_B = data['B'].to(self.device) # Target font image
-
     def forward(self):
         self.fake_B, self.encoded_real_A = self.netG(self.real_A, self.labels)
         self.encoded_fake_B = self.netG.encode(self.fake_B, self.labels)
 
-    def set_requires_grad(self, nets, requires_grad=False):
-        if not isinstance(nets, list):
-            nets = [nets]
-        for net in nets:
-            if net is not None:
-                for param in net.parameters():
-                    param.requires_grad = requires_grad
-
     def optimize_parameters(self, use_autocast=False):
         self.forward()
 
-        # --- Discriminator ---
         self.set_requires_grad(self.netD, True)
         self.optimizer_D.zero_grad()
 
@@ -656,7 +612,6 @@ class Zi2ZiModel:
             print("判別器損失為 NaN，停止訓練。")
             return
 
-        # --- Generator ---
         self.set_requires_grad(self.netD, False)
         self.optimizer_G.zero_grad()
 
@@ -693,6 +648,21 @@ class Zi2ZiModel:
             if net is not None:
                 for param in net.parameters():
                     param.requires_grad = requires_grad
+
+    def set_train_eval_mode(self):
+        if self.is_training:
+            self.netG.train()
+            self.netD.train()
+            print("Model set to TRAIN mode.")
+        else:
+            self.netG.eval()
+            self.netD.eval()
+            print("Model set to EVAL mode.")
+
+    def set_input(self, data):
+        self.labels = data['label'].to(self.device)
+        self.real_A = data['A'].to(self.device) # Input font image
+        self.real_B = data['B'].to(self.device) # Target font image
 
     def print_networks(self, verbose=False):
         print('---------- Networks initialized -------------')
