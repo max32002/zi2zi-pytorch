@@ -136,14 +136,13 @@ class UnetSkipConnectionBlock(nn.Module):
                  norm_layer=nn.InstanceNorm2d, layer=0, embedding_dim=64,
                  use_dropout=False, self_attention=False, attention_type='linear',
                  blur=False, outermost=False, innermost=False, use_transformer=False,
-                 attn_layers=None, up_mode='conv', freeze_downsample=False):
+                 attn_layers=None, up_mode='conv'):
         super(UnetSkipConnectionBlock, self).__init__()
         self.outermost = outermost
         self.innermost = innermost
         self.layer = layer
         self.attn_layers = attn_layers or []
         self.up_mode = up_mode
-        self.freeze_downsample = freeze_downsample
 
         use_bias = norm_layer != nn.BatchNorm2d
         if input_nc is None:
@@ -153,56 +152,89 @@ class UnetSkipConnectionBlock(nn.Module):
         stride = 1 if innermost else 2
         padding = 1
 
-        self.downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=kernel_size, stride=stride, padding=padding, bias=use_bias)
-        nn.init.kaiming_normal_(self.downconv.weight, nonlinearity='leaky_relu')
+        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=kernel_size, stride=stride, padding=padding, bias=use_bias)
+        nn.init.kaiming_normal_(downconv.weight, nonlinearity='leaky_relu')
 
-        self.downrelu = nn.SiLU(inplace=True)
-        self.downnorm = norm_layer(inner_nc)
-        self.uprelu = nn.SiLU(inplace=True)
-        self.upnorm = norm_layer(outer_nc)
+        downrelu = nn.SiLU(inplace=True)
+        downnorm = norm_layer(inner_nc)
+        uprelu = nn.SiLU(inplace=True)
+        upnorm = norm_layer(outer_nc)
 
         if outermost:
-            in_channels = inner_nc * 2
+            if self.up_mode == 'conv':
+                upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
+                nn.init.kaiming_normal_(upconv.weight)
+            elif self.up_mode == 'upsample':
+                upconv = nn.Sequential(
+                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                    nn.Conv2d(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    upnorm
+                )
+                nn.init.kaiming_normal_(upconv[1].weight)
+            elif self.up_mode == 'pixelshuffle':
+                upconv = nn.Sequential(
+                    nn.Conv2d(inner_nc * 2 if not innermost else inner_nc, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    nn.PixelShuffle(2),
+                    nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    upnorm
+                )
+                nn.init.kaiming_normal_(upconv[0].weight)
+                nn.init.kaiming_normal_(upconv[2].weight)
+            else:
+                raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
+            self.down = nn.Sequential(downconv)
+            self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
         elif innermost:
-            in_channels = inner_nc
-        else:
-            in_channels = inner_nc * 2
-
-        if self.up_mode == 'conv':
-            self.upconv = nn.ConvTranspose2d(in_channels, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
-            nn.init.kaiming_normal_(self.upconv.weight)
-        elif self.up_mode == 'upsample':
-            self.upconv = nn.Sequential(
-                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-                nn.Conv2d(in_channels, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                self.upnorm
-            )
-            nn.init.kaiming_normal_(self.upconv[1].weight)
-        elif self.up_mode == 'pixelshuffle':
-            self.upconv = nn.Sequential(
-                nn.Conv2d(in_channels, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                nn.PixelShuffle(2),
-                nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),  # << smoothing conv
-                self.upnorm
-            )
-            nn.init.kaiming_normal_(self.upconv[0].weight)
-            nn.init.kaiming_normal_(self.upconv[2].weight)
-        else:
-            raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv', 'upsample', or 'pixelshuffle'.")
-
-        # Layer logic
-        if outermost:
-            self.down = nn.Sequential(self.downconv)
-            self.up = nn.Sequential(self.uprelu, self.upconv, nn.Tanh())
-        elif innermost:
-            self.down = nn.Sequential(self.downrelu, self.downconv)
-            self.up = nn.Sequential(self.uprelu, self.upconv, self.upnorm)
+            if self.up_mode == 'conv':
+                upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
+                nn.init.kaiming_normal_(upconv.weight)
+            elif self.up_mode == 'upsample':
+                upconv = nn.Sequential(
+                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                    nn.Conv2d(inner_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    upnorm
+                )
+                nn.init.kaiming_normal_(upconv[1].weight)
+            elif self.up_mode == 'pixelshuffle':
+                upconv = nn.Sequential(
+                    nn.Conv2d(inner_nc, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    nn.PixelShuffle(2),
+                    nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    upnorm
+                )
+                nn.init.kaiming_normal_(upconv[0].weight)
+                nn.init.kaiming_normal_(upconv[2].weight)
+            else:
+                raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
+            self.down = nn.Sequential(downrelu, downconv)
+            self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_transformer:
                 self.transformer_block = TransformerBlock(inner_nc)
             self.film = FiLMModulation(inner_nc, embedding_dim)
         else:
-            self.down = nn.Sequential(self.downrelu, self.downconv, self.downnorm)
-            self.up = nn.Sequential(self.uprelu, self.upconv, self.upnorm)
+            if self.up_mode == 'conv':
+                upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
+                nn.init.kaiming_normal_(upconv.weight)
+            elif self.up_mode == 'upsample':
+                upconv = nn.Sequential(
+                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                    nn.Conv2d(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    upnorm
+                )
+                nn.init.kaiming_normal_(upconv[1].weight)
+            elif self.up_mode == 'pixelshuffle':
+                upconv = nn.Sequential(
+                    nn.Conv2d(inner_nc * 2, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    nn.PixelShuffle(2),
+                    nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),  # << smoothing conv
+                    upnorm
+                )
+                nn.init.kaiming_normal_(upconv[0].weight)
+            else:
+                raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
+            self.down = nn.Sequential(downrelu, downconv, downnorm)
+            self.up = nn.Sequential(uprelu, upconv, upnorm)
+
             if use_dropout:
                 self.up.add_module("dropout", nn.Dropout(0.3))
 
@@ -213,14 +245,7 @@ class UnetSkipConnectionBlock(nn.Module):
         else:
             self.attn_block = None
 
-        if not outermost and not innermost and layer in [4, 5, 6, 7]:
-            self.res_skip = ResSkip(outer_nc, outer_nc) if hasattr(self, 'res_skip') else None
-
-        if self.freeze_downsample:
-            for param in self.downconv.parameters():
-                param.requires_grad = False
-            for param in self.downnorm.parameters():
-                param.requires_grad = False
+        self.res_skip = ResSkip(outer_nc, outer_nc) if not outermost and not innermost and layer in [4, 5, 6, 7] else None
 
     def forward(self, x, style=None):
         if hasattr(self, 'attn_block') and self.attn_block is not None:
@@ -717,20 +742,95 @@ class Zi2ZiModel:
             print(f" Model {step} loaded successfully")
         return loaded
 
+    def extract_keywords(self, name):
+        KEYWORD_MATCH_RULES = ["down", "up", "conv", "res", "encoder", "decoder", "self", "line"]
+        return set([k for k in KEYWORD_MATCH_RULES if k in name])
+
+    def extract_layer_name(self, name):
+        parts = name.split('.')
+        if parts:
+            return parts[0]
+        return name
+
     def _initialize_unmatched_weights(self, model, loaded_state_dict, model_name="Model"):
         model_state = model.state_dict()
+        used_keys = set()
+
+        shape_to_loaded_keys = {}
+        name_to_layer = {}
+        name_to_keywords = {}
+
+        for k, v in loaded_state_dict.items():
+            shape_to_loaded_keys.setdefault(v.shape, []).append(k)
+            name_to_layer[k] = self.extract_layer_name(k)
+            name_to_keywords[k] = self.extract_keywords(k)
+
         for name, param in model.named_parameters():
-            if name not in loaded_state_dict or model_state[name].shape != loaded_state_dict[name].shape:
-                print(f" Re-initializing param (shape mismatch or missing): {model_name}.{name}")
-                if "weight" in name:
-                    nn.init.kaiming_normal_(param.data, mode='fan_out', nonlinearity='leaky_relu')
-                elif "bias" in name:
-                    nn.init.constant_(param.data, 0)
+            full_name = name
+            current_layer = self.extract_layer_name(full_name)
+            current_keywords = self.extract_keywords(full_name)
+
+            #print(f" Loading param (name - shape): {model_name}.{full_name} - {param.shape}")
+
+            if full_name in loaded_state_dict and param.shape == loaded_state_dict[full_name].shape:
+                param.data.copy_(loaded_state_dict[full_name])
+                used_keys.add(full_name)
+            else:
+                matched = False
+                candidate_keys = shape_to_loaded_keys.get(param.shape, [])
+                for candidate in candidate_keys:
+                    if candidate in used_keys:
+                        continue
+
+                    candidate_layer = name_to_layer.get(candidate)
+                    candidate_keywords = name_to_keywords.get(candidate, set())
+
+                    # 層級名稱與語意關鍵字需一致
+                    if candidate_layer == current_layer and current_keywords & candidate_keywords:
+                        print(f" Loading param (name - shape): {model_name}.{full_name} - {param.shape}")
+                        print(f"  --> Shape & layer & keyword match. Copying from {candidate}")
+                        param.data.copy_(loaded_state_dict[candidate])
+                        used_keys.add(candidate)
+                        matched = True
+                        break
+
+                if not matched:
+                    print(f" Loading param (name - shape): {model_name}.{full_name} - {param.shape}")
+                    print(f"  --> No suitable match found. Re-initializing param: {model_name}.{full_name}")
+                    if "weight" in full_name:
+                        # 暫時性的模型增加 conv.
+                        #init_smoothing_conv = True
+                        init_smoothing_conv = False
+                        if init_smoothing_conv:
+                            # 嘗試找對應的 bias
+                            bias_name = name.replace("weight", "bias")
+                            bias_param = model_state.get(bias_name, None)
+                            matched = self.init_smoothing_conv_as_identity(param, bias_param)
+                            if matched:
+                                print(f" ✅  Initialized {model_name}.{name} as identity smoothing conv")
+                                continue  # 跳過預設初始化
+
+                        nn.init.kaiming_normal_(param.data, mode='fan_out', nonlinearity='leaky_relu')
+                    elif "bias" in full_name:
+                        nn.init.constant_(param.data, 0)
 
         for name, buffer in model.named_buffers():
             if name not in loaded_state_dict or model_state[name].shape != loaded_state_dict[name].shape:
                 print(f" Re-initializing buffer (shape mismatch or missing): {model_name}.{name}")
                 buffer.data.zero_()
+
+    def init_smoothing_conv_as_identity(self, conv_param, bias_param=None):
+        """將 smoothing conv 初始化為接近 identity（中心為 1，其餘為 0）"""
+        if conv_param.shape[2:] == (3, 3) and conv_param.shape[0] == conv_param.shape[1]:
+            with torch.no_grad():
+                conv_param.zero_()
+                c = conv_param.shape[0]
+                for i in range(c):
+                    conv_param[i, i, 1, 1] = 1.0  # 對角線中心位置為 1
+                if bias_param is not None:
+                    bias_param.zero_()
+            return True
+        return False
 
     def save_image(self, tensor: Union[torch.Tensor, List[torch.Tensor]]) -> np.ndarray:
         grid = vutils.make_grid(tensor)

@@ -115,6 +115,9 @@ def infer(args):
     t_finish = time.time()
     print(f'Cold start time: {t_finish - t0:.2f}')
 
+    # for convert model.
+    #model.save_networks('converted')
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Infer')
     parser.add_argument('--anti_alias', type=int, default=0)
