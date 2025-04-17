@@ -70,6 +70,7 @@ def train(args):
         d_blur=args.d_blur,
         lr=args.lr,
         norm_type=args.norm_type,
+        freeze_downsample=args.freeze_downsample,
         up_mode=args.up_mode
     )
 
@@ -190,5 +191,6 @@ if __name__ == '__main__':
     parser.add_argument('--self_attention', action='store_true')
     parser.add_argument('--use_autocast', action="store_true", help='Enable autocast for mixed precision training')
     parser.add_argument('--up_mode', type=str, default="conv", help="切換 upsample / conv / pixelshuffle")
+    parser.add_argument('--freeze_downsample', action='store_true')
     args = parser.parse_args()
     train(args)

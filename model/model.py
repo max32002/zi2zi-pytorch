@@ -136,13 +136,14 @@ class UnetSkipConnectionBlock(nn.Module):
                  norm_layer=nn.InstanceNorm2d, layer=0, embedding_dim=64,
                  use_dropout=False, self_attention=False, attention_type='linear',
                  blur=False, outermost=False, innermost=False, use_transformer=False,
-                 attn_layers=None, up_mode='conv'):
+                 attn_layers=None, up_mode='conv', freeze_downsample=False):
         super(UnetSkipConnectionBlock, self).__init__()
         self.outermost = outermost
         self.innermost = innermost
         self.layer = layer
         self.attn_layers = attn_layers or []
         self.up_mode = up_mode
+        self.freeze_downsample = freeze_downsample
 
         use_bias = norm_layer != nn.BatchNorm2d
         if input_nc is None:
@@ -230,6 +231,7 @@ class UnetSkipConnectionBlock(nn.Module):
                     upnorm
                 )
                 nn.init.kaiming_normal_(upconv[0].weight)
+                nn.init.kaiming_normal_(upconv[2].weight)
             else:
                 raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
             self.down = nn.Sequential(downrelu, downconv, downnorm)
@@ -246,6 +248,12 @@ class UnetSkipConnectionBlock(nn.Module):
             self.attn_block = None
 
         self.res_skip = ResSkip(outer_nc, outer_nc) if not outermost and not innermost and layer in [4, 5, 6, 7] else None
+
+        if self.freeze_downsample:
+            for param in downconv.parameters():
+                param.requires_grad = False
+            for param in downnorm.parameters():
+                param.requires_grad = False
 
     def forward(self, x, style=None):
         if hasattr(self, 'attn_block') and self.attn_block is not None:
@@ -279,7 +287,7 @@ class UNetGenerator(nn.Module):
                  embedding_num=40, embedding_dim=64,
                  norm_layer=nn.InstanceNorm2d, use_dropout=False,
                  self_attention=False, blur=False, attention_type='linear',
-                 attn_layers=None, up_mode='conv'):
+                 attn_layers=None, up_mode='conv', freeze_downsample=False):
         super(UNetGenerator, self).__init__()
         if attn_layers is None:
             attn_layers = []
@@ -289,7 +297,7 @@ class UNetGenerator(nn.Module):
             norm_layer=norm_layer, layer=1, embedding_dim=embedding_dim,
             self_attention=self_attention, blur=blur, innermost=True,
             use_transformer=True, attention_type=attention_type,
-            attn_layers=attn_layers, up_mode=up_mode
+            attn_layers=attn_layers, up_mode=up_mode, freeze_downsample=freeze_downsample
         )
 
         for i in range(num_downs - 5):
@@ -297,18 +305,18 @@ class UNetGenerator(nn.Module):
                 ngf * 8, ngf * 8, input_nc=None, submodule=unet_block,
                 norm_layer=norm_layer, layer=i+2, use_dropout=use_dropout,
                 self_attention=self_attention, blur=blur, attention_type=attention_type,
-                attn_layers=attn_layers, up_mode=up_mode
+                attn_layers=attn_layers, up_mode=up_mode, freeze_downsample=freeze_downsample
             )
 
-        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, submodule=unet_block, norm_layer=norm_layer, layer=5, up_mode=up_mode)
-        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, submodule=unet_block, norm_layer=norm_layer, layer=6, up_mode=up_mode)
-        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, submodule=unet_block, norm_layer=norm_layer, layer=7, up_mode=up_mode)
+        unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, submodule=unet_block, norm_layer=norm_layer, layer=5, up_mode=up_mode, freeze_downsample=freeze_downsample)
+        unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, submodule=unet_block, norm_layer=norm_layer, layer=6, up_mode=up_mode, freeze_downsample=freeze_downsample)
+        unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, submodule=unet_block, norm_layer=norm_layer, layer=7, up_mode=up_mode, freeze_downsample=freeze_downsample)
 
         self.model = UnetSkipConnectionBlock(
             output_nc, ngf, input_nc=input_nc, submodule=unet_block,
             norm_layer=norm_layer, layer=8, outermost=True,
             self_attention=self_attention, blur=blur,
-            attention_type=attention_type, attn_layers=attn_layers, up_mode=up_mode
+            attention_type=attention_type, attn_layers=attn_layers, up_mode=up_mode, freeze_downsample=freeze_downsample
         )
 
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
@@ -527,9 +535,10 @@ class Zi2ZiModel:
                  lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
                  self_attention=False, attention_type='linear', residual_block=False,
                  weight_decay = 1e-5, beta1=0.5, g_blur=False, d_blur=False, epoch=40,
-                 gradient_clip=0.5, norm_type="instance", up_mode='conv'):
+                 gradient_clip=0.5, norm_type="instance", up_mode='conv', freeze_downsample=False):
         self.norm_type = norm_type
         self.up_mode = up_mode
+        self.freeze_downsample = freeze_downsample
 
         if is_training:
             self.use_dropout = True
@@ -583,6 +592,7 @@ class Zi2ZiModel:
             attn_layers=[4, 6],
             blur=self.g_blur,
             norm_layer=norm_layer,
+            freeze_downsample=self.freeze_downsample,
             up_mode=self.up_mode
         )
         self.netD = Discriminator(
@@ -799,8 +809,8 @@ class Zi2ZiModel:
                     print(f"  --> No suitable match found. Re-initializing param: {model_name}.{full_name}")
                     if "weight" in full_name:
                         # 暫時性的模型增加 conv.
-                        #init_smoothing_conv = True
                         init_smoothing_conv = False
+                        #init_smoothing_conv = True
                         if init_smoothing_conv:
                             # 嘗試找對應的 bias
                             bias_name = name.replace("weight", "bias")
