@@ -145,7 +145,7 @@ class UnetSkipConnectionBlock(nn.Module):
 
         # === hybrid 模式處理 ===
         if up_mode == 'hybrid':
-            self.up_mode = 'pixelshuffle' if layer in [1, 2] else 'conv'
+            self.up_mode = 'pixelshuffle' if layer in [6, 7, 8] else 'conv'
         else:
             self.up_mode = up_mode
 
