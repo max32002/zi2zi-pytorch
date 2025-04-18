@@ -142,7 +142,13 @@ class UnetSkipConnectionBlock(nn.Module):
         self.innermost = innermost
         self.layer = layer
         self.attn_layers = attn_layers or []
-        self.up_mode = up_mode
+
+        # === hybrid 模式處理 ===
+        if up_mode == 'hybrid':
+            self.up_mode = 'pixelshuffle' if layer in [1, 2] else 'conv'
+        else:
+            self.up_mode = up_mode
+
         self.freeze_downsample = freeze_downsample
 
         use_bias = norm_layer != nn.BatchNorm2d
@@ -161,6 +167,7 @@ class UnetSkipConnectionBlock(nn.Module):
         uprelu = nn.SiLU(inplace=True)
         upnorm = norm_layer(outer_nc)
 
+        # === outermost 層 ===
         if outermost:
             if self.up_mode == 'conv':
                 upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
@@ -174,7 +181,7 @@ class UnetSkipConnectionBlock(nn.Module):
                 nn.init.kaiming_normal_(upconv[1].weight)
             elif self.up_mode == 'pixelshuffle':
                 upconv = nn.Sequential(
-                    nn.Conv2d(inner_nc * 2 if not innermost else inner_nc, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
+                    nn.Conv2d(inner_nc * 2, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
                     nn.PixelShuffle(2),
                     nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
                     upnorm
@@ -182,9 +189,11 @@ class UnetSkipConnectionBlock(nn.Module):
                 nn.init.kaiming_normal_(upconv[0].weight)
                 nn.init.kaiming_normal_(upconv[2].weight)
             else:
-                raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
+                raise ValueError(f"Unsupported up_mode: {self.up_mode}")
             self.down = nn.Sequential(downconv)
             self.up = nn.Sequential(uprelu, upconv, nn.Tanh())
+
+        # === innermost 層 ===
         elif innermost:
             if self.up_mode == 'conv':
                 upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
@@ -206,12 +215,15 @@ class UnetSkipConnectionBlock(nn.Module):
                 nn.init.kaiming_normal_(upconv[0].weight)
                 nn.init.kaiming_normal_(upconv[2].weight)
             else:
-                raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
+                raise ValueError(f"Unsupported up_mode: {self.up_mode}")
+
             self.down = nn.Sequential(downrelu, downconv)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
             if use_transformer:
                 self.transformer_block = TransformerBlock(inner_nc)
             self.film = FiLMModulation(inner_nc, embedding_dim)
+
+        # === 中間層 ===
         else:
             if self.up_mode == 'conv':
                 upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
@@ -227,16 +239,16 @@ class UnetSkipConnectionBlock(nn.Module):
                 upconv = nn.Sequential(
                     nn.Conv2d(inner_nc * 2, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
                     nn.PixelShuffle(2),
-                    nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),  # << smoothing conv
+                    nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
                     upnorm
                 )
                 nn.init.kaiming_normal_(upconv[0].weight)
                 nn.init.kaiming_normal_(upconv[2].weight)
             else:
-                raise ValueError(f"Unsupported up_mode: {self.up_mode}. Choose 'conv' or 'upsample'.")
+                raise ValueError(f"Unsupported up_mode: {self.up_mode}")
+
             self.down = nn.Sequential(downrelu, downconv, downnorm)
             self.up = nn.Sequential(uprelu, upconv, upnorm)
-
             if use_dropout:
                 self.up.add_module("dropout", nn.Dropout(0.3))
 
@@ -753,7 +765,8 @@ class Zi2ZiModel:
         return loaded
 
     def extract_keywords(self, name):
-        KEYWORD_MATCH_RULES = ["down", "up", "conv", "res", "encoder", "decoder", "self", "line"]
+        KEYWORD_MATCH_RULES = ["down", "conv", "res", "encoder", "decoder", "self", "line"]
+        #KEYWORD_MATCH_RULES.append("up")
         return set([k for k in KEYWORD_MATCH_RULES if k in name])
 
     def extract_layer_name(self, name):
