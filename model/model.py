@@ -54,12 +54,17 @@ class SelfAttention(nn.Module):
 class ResSkip(nn.Module):
     def __init__(self, in_channels, out_channels, norm_layer=nn.GroupNorm, groups=8):
         super().__init__()
+
+        norm_groups = min(groups, out_channels)
+        while out_channels % norm_groups != 0 and norm_groups > 1:
+            norm_groups -= 1
+
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.norm1 = norm_layer(groups, out_channels)
+        self.norm1 = norm_layer(norm_groups, out_channels)
         self.act1 = nn.SiLU()
 
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.norm2 = norm_layer(groups, out_channels)
+        self.norm2 = norm_layer(norm_groups, out_channels)
         self.act2 = nn.SiLU()
 
         self.skip = nn.Conv2d(in_channels, out_channels, 1, bias=False) if in_channels != out_channels else nn.Identity()
@@ -70,7 +75,6 @@ class ResSkip(nn.Module):
         out = self.act2(self.norm2(self.conv2(out)))
         return out + identity
 
-
 class PixelShuffleUpBlock(nn.Module):
     def __init__(self, in_channels, out_channels, norm_layer=nn.GroupNorm, groups=8):
         super().__init__()
@@ -79,11 +83,15 @@ class PixelShuffleUpBlock(nn.Module):
 
         self.pixel_shuffle = nn.PixelShuffle(2)
 
+        norm_groups = min(groups, out_channels)
+        while out_channels % norm_groups != 0 and norm_groups > 1:
+            norm_groups -= 1
+
         self.post_conv = nn.Sequential(
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            norm_layer(groups, out_channels),
+            norm_layer(norm_groups, out_channels),
             nn.SiLU(),
-            ResSkip(out_channels, out_channels, norm_layer=norm_layer, groups=groups)
+            ResSkip(out_channels, out_channels, norm_layer=norm_layer, groups=norm_groups)
         )
 
     def forward(self, x):
