@@ -52,20 +52,45 @@ class SelfAttention(nn.Module):
         return self.gamma * out + x
 
 class ResSkip(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, norm_layer=nn.GroupNorm, groups=8):
         super().__init__()
-        self.depthwise = nn.Conv2d(in_channels, in_channels, 3, padding=1, groups=in_channels)
-        self.pointwise = nn.Conv2d(in_channels, out_channels, 1)
-        self.norm = nn.InstanceNorm2d(out_channels)
-        self.act = nn.SiLU()
-        self.skip = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.norm1 = norm_layer(groups, out_channels)
+        self.act1 = nn.SiLU()
+
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.norm2 = norm_layer(groups, out_channels)
+        self.act2 = nn.SiLU()
+
+        self.skip = nn.Conv2d(in_channels, out_channels, 1, bias=False) if in_channels != out_channels else nn.Identity()
 
     def forward(self, x):
         identity = self.skip(x)
-        out = self.depthwise(x)
-        out = self.pointwise(out)
-        out = self.act(self.norm(out))
+        out = self.act1(self.norm1(self.conv1(x)))
+        out = self.act2(self.norm2(self.conv2(out)))
         return out + identity
+
+
+class PixelShuffleUpBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, norm_layer=nn.GroupNorm, groups=8):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels * 4, kernel_size=3, stride=1, padding=1, bias=False)
+        nn.init.kaiming_normal_(self.conv.weight)
+
+        self.pixel_shuffle = nn.PixelShuffle(2)
+
+        self.post_conv = nn.Sequential(
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            norm_layer(groups, out_channels),
+            nn.SiLU(),
+            ResSkip(out_channels, out_channels, norm_layer=norm_layer, groups=groups)
+        )
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.pixel_shuffle(x)
+        x = self.post_conv(x)
+        return x
 
 class TransformerBlock(nn.Module):
     def __init__(self, in_dim, heads=4):
@@ -131,6 +156,44 @@ class LinearAttention(nn.Module):
         out = self.out_proj(out)
         return self.gamma * out + x
 
+class LearnableInterpolationUpsample(nn.Module):
+    def __init__(self, in_channels, out_channels, skip_channels=0,
+                 mode='deconv', fusion='concat'):
+        super().__init__()
+        self.mode = mode
+        self.fusion = fusion
+
+        if self.mode == 'deconv':
+            self.upsample = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)
+        elif self.mode == 'interpolate_conv':
+            self.upsample = nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+            )
+        else:
+            raise ValueError(f"Unknown upsample mode: {mode}")
+
+        fusion_in_channels = out_channels + skip_channels if fusion == 'concat' else out_channels
+        self.fusion_conv = nn.Conv2d(fusion_in_channels, out_channels, kernel_size=3, padding=1)
+        self.activation = nn.ReLU(inplace=True)
+
+    def forward(self, x, skip=None):
+        x = self.upsample(x)
+
+        if skip is not None:
+            if self.fusion == 'concat':
+                x = torch.cat([x, skip], dim=1)
+            elif self.fusion == 'add':
+                if x.shape[-2:] != skip.shape[-2:]:
+                    skip = F.interpolate(skip, size=x.shape[-2:], mode='bilinear', align_corners=False)
+                x = x + skip
+            else:
+                raise ValueError(f"Unknown fusion type: {self.fusion}")
+
+        x = self.fusion_conv(x)
+        x = self.activation(x)
+        return x
+
 class UnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc, input_nc=None, submodule=None,
                  norm_layer=nn.InstanceNorm2d, layer=0, embedding_dim=64,
@@ -173,21 +236,9 @@ class UnetSkipConnectionBlock(nn.Module):
                 upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
                 nn.init.kaiming_normal_(upconv.weight)
             elif self.up_mode == 'upsample':
-                upconv = nn.Sequential(
-                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-                    nn.Conv2d(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[1].weight)
+                upconv = LearnableInterpolationUpsample(inner_nc * 2, outer_nc)
             elif self.up_mode == 'pixelshuffle':
-                upconv = nn.Sequential(
-                    nn.Conv2d(inner_nc * 2, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    nn.PixelShuffle(2),
-                    nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[0].weight)
-                nn.init.kaiming_normal_(upconv[2].weight)
+                upconv = PixelShuffleUpBlock(inner_nc * 2, outer_nc)
             else:
                 raise ValueError(f"Unsupported up_mode: {self.up_mode}")
             self.down = nn.Sequential(downconv)
@@ -199,21 +250,9 @@ class UnetSkipConnectionBlock(nn.Module):
                 upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
                 nn.init.kaiming_normal_(upconv.weight)
             elif self.up_mode == 'upsample':
-                upconv = nn.Sequential(
-                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-                    nn.Conv2d(inner_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[1].weight)
+                upconv = LearnableInterpolationUpsample(inner_nc, outer_nc)
             elif self.up_mode == 'pixelshuffle':
-                upconv = nn.Sequential(
-                    nn.Conv2d(inner_nc, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    nn.PixelShuffle(2),
-                    nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[0].weight)
-                nn.init.kaiming_normal_(upconv[2].weight)
+                upconv = PixelShuffleUpBlock(inner_nc, outer_nc)
             else:
                 raise ValueError(f"Unsupported up_mode: {self.up_mode}")
 
@@ -229,21 +268,9 @@ class UnetSkipConnectionBlock(nn.Module):
                 upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
                 nn.init.kaiming_normal_(upconv.weight)
             elif self.up_mode == 'upsample':
-                upconv = nn.Sequential(
-                    nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-                    nn.Conv2d(inner_nc * 2, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[1].weight)
+                upconv = LearnableInterpolationUpsample(inner_nc * 2, outer_nc)
             elif self.up_mode == 'pixelshuffle':
-                upconv = nn.Sequential(
-                    nn.Conv2d(inner_nc * 2, outer_nc * 4, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    nn.PixelShuffle(2),
-                    nn.Conv2d(outer_nc, outer_nc, kernel_size=3, stride=1, padding=1, bias=use_bias),
-                    upnorm
-                )
-                nn.init.kaiming_normal_(upconv[0].weight)
-                nn.init.kaiming_normal_(upconv[2].weight)
+                upconv = PixelShuffleUpBlock(inner_nc * 2, outer_nc)
             else:
                 raise ValueError(f"Unsupported up_mode: {self.up_mode}")
 
@@ -765,8 +792,9 @@ class Zi2ZiModel:
         return loaded
 
     def extract_keywords(self, name):
-        KEYWORD_MATCH_RULES = ["down", "conv", "res", "encoder", "decoder", "self", "line"]
-        #KEYWORD_MATCH_RULES.append("up")
+        KEYWORD_MATCH_RULES = ["down", "conv", "encoder", "decoder", "self", "line"]
+        KEYWORD_MATCH_RULES.append("up")
+        #KEYWORD_MATCH_RULES.append("res")
         return set([k for k in KEYWORD_MATCH_RULES if k in name])
 
     def extract_layer_name(self, name):
