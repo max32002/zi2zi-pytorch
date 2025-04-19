@@ -1,7 +1,8 @@
 import re
-import sys
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
+import os
 
 def parse_log_file(filepath):
     with open(filepath, 'r', encoding='utf-8') as file:
@@ -37,7 +38,7 @@ def parse_log_file(filepath):
 
     return pd.DataFrame(records)
 
-def plot_losses(df):
+def plot_losses(df, output_filename=None):
     df_mean = df.groupby('epoch').mean().reset_index()
 
     plt.figure(figsize=(12, 7))
@@ -51,17 +52,27 @@ def plot_losses(df):
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+
+    if output_filename:
+        plt.savefig(output_filename)
+        print(f"圖檔已儲存至: {output_filename}")
+    else:
+        plt.show()
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("用法: python plot_losses.py <log檔案名稱>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="從 log 檔案中解析 loss 並繪製圖表。")
+    parser.add_argument("log_file", help="輸入的 log 檔案名稱")
+    parser.add_argument("-s", "--silent", action="store_true", help="不顯示 plot，直接儲存圖檔")
+    args = parser.parse_args()
 
-    log_file = sys.argv[1]
+    log_file = args.log_file
+    silent_mode = args.silent
+
     try:
         df = parse_log_file(log_file)
-        plot_losses(df)
+        base_filename = os.path.splitext(log_file)[0]
+        output_filename = f"{base_filename}.png"
+        plot_losses(df, output_filename if silent_mode else None)
     except FileNotFoundError:
         print(f"找不到檔案: {log_file}")
     except Exception as e:
