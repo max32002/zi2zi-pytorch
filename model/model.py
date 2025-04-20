@@ -244,7 +244,7 @@ class UnetSkipConnectionBlock(nn.Module):
                 upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
                 nn.init.kaiming_normal_(upconv.weight)
             elif self.up_mode == 'upsample':
-                upconv = LearnableInterpolationUpsample(inner_nc * 2, outer_nc)
+                upconv = LearnableInterpolationUpsample(inner_nc * 2, outer_nc, mode='interpolate_conv')
             elif self.up_mode == 'pixelshuffle':
                 upconv = PixelShuffleUpBlock(inner_nc * 2, outer_nc)
             else:
@@ -258,7 +258,7 @@ class UnetSkipConnectionBlock(nn.Module):
                 upconv = nn.ConvTranspose2d(inner_nc, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
                 nn.init.kaiming_normal_(upconv.weight)
             elif self.up_mode == 'upsample':
-                upconv = LearnableInterpolationUpsample(inner_nc, outer_nc)
+                upconv = LearnableInterpolationUpsample(inner_nc, outer_nc, mode='interpolate_conv')
             elif self.up_mode == 'pixelshuffle':
                 upconv = PixelShuffleUpBlock(inner_nc, outer_nc)
             else:
@@ -276,7 +276,7 @@ class UnetSkipConnectionBlock(nn.Module):
                 upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc, kernel_size=4, stride=2, padding=1, output_padding=1, bias=use_bias)
                 nn.init.kaiming_normal_(upconv.weight)
             elif self.up_mode == 'upsample':
-                upconv = LearnableInterpolationUpsample(inner_nc * 2, outer_nc)
+                upconv = LearnableInterpolationUpsample(inner_nc * 2, outer_nc, mode='interpolate_conv')
             elif self.up_mode == 'pixelshuffle':
                 upconv = PixelShuffleUpBlock(inner_nc * 2, outer_nc)
             else:
