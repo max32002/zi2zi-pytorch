@@ -71,7 +71,9 @@ def train(args):
         lr=args.lr,
         norm_type=args.norm_type,
         freeze_downsample=args.freeze_downsample,
-        up_mode=args.up_mode
+        up_mode=args.up_mode,
+        ngf=args.ngf,
+        ndf=args.ndf
     )
 
     model.print_networks(True)
@@ -88,7 +90,6 @@ def train(args):
     dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     total_batches = math.ceil(len(train_dataset) / args.batch_size)
 
-
     # --- Training Loop ---
     start_time = time.time()
     print(f"Starting training from epoch {start_epoch}/{args.epoch - 1}...")
@@ -97,8 +98,6 @@ def train(args):
         epoch_start_time = time.time()
 
         for batch_id, batch_data in enumerate(dataloader):
-            current_step_time = time.time()
-
             labels, image_B, image_A = batch_data
             model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
             model.set_input(model_input_data)
@@ -128,15 +127,18 @@ def train(args):
             # --- Checkpointing ---
             if global_steps % args.checkpoint_steps == 0:
                 if global_steps >= args.checkpoint_steps_after:
+                    # You must save the data before deleting it; the worst-case scenario is that all data will be lost.
                     model.save_networks(global_steps)
-
                     # --- Clean up old checkpoints (Optional: only keep last) ---
-                    if args.checkpoint_only_last:
-                        for checkpoint_index in range(0, global_steps, args.checkpoint_steps):
-                            for net_type in ["D", "G"]:
-                                filepath = os.path.join(checkpoint_dir, f"{checkpoint_index}_net_{net_type}.pth")
-                                if os.path.isfile(filepath):
-                                    os.remove(filepath)
+                    if args.checkpoint_only_last:                 
+                        # --- Clean up old checkpoints ---
+                        for index_step in range(args.checkpoint_steps, global_steps, args.checkpoint_steps):
+                            for net_type in ["G", "D"]:
+                                f_path = f"{index_step}_net_{net_type}.pth"
+                                try:
+                                    os.remove(os.path.join(checkpoint_dir, f_path))
+                                except FileNotFoundError:
+                                    continue
                         clear_google_drive_trash(drive_service)
                 else:
                     print(f"Checkpoint step {global_steps} reached, but saving starts after step {args.checkpoint_steps_after}.")
@@ -192,5 +194,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_autocast', action="store_true", help='Enable autocast for mixed precision training')
     parser.add_argument('--up_mode', type=str, default="conv", help="切換 upsample / conv / pixelshuffle")
     parser.add_argument('--freeze_downsample', action='store_true')
+    parser.add_argument('--ngf', type=int, default=64, help='generator filters in first conv layer')
+    parser.add_argument('--ndf', type=int, default=64, help='discriminator filters in first conv layer')
     args = parser.parse_args()
     train(args)

@@ -16,6 +16,8 @@ class DatasetFromObj(data.Dataset):
     def __init__(self, obj_path, input_nc=3, augment=False, bold=False, rotate=False, blur=False, start_from=0):
         super(DatasetFromObj, self).__init__()
         self.image_provider = PickledImageProvider(obj_path)
+        if len(self.image_provider) == 0:
+            raise ValueError(f"No examples found in {obj_path}. Please check the data file.")
         self.input_nc = input_nc
         if self.input_nc == 1:
             self.transform = transforms.Normalize(0.5, 0.5)
@@ -30,12 +32,12 @@ class DatasetFromObj(data.Dataset):
         self.start_from = start_from
 
     def __getitem__(self, index):
-        item = self.image_provider.examples[index]
+        item = self.image_provider[index]
         img_A, img_B = self.process(item[1])
         return item[0] - self.start_from, img_A, img_B
 
     def __len__(self):
-        return len(self.image_provider.examples)
+        return len(self.image_provider)
 
     def process(self, img_bytes):
         """

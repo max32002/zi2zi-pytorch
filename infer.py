@@ -81,7 +81,11 @@ def infer(args):
         attention_type=args.attention_type,
         residual_block=args.residual_block, 
         up_mode=args.up_mode,
-        is_training=False
+        is_training=False,
+        g_blur=args.g_blur,
+        d_blur=args.d_blur,
+        ngf=args.ngf,
+        ndf=args.ndf
     )
     model.print_networks(True)
     if not model.load_networks(args.resume):
@@ -152,5 +156,9 @@ if __name__ == '__main__':
     parser.add_argument('--src_txt', type=str, default='')
     parser.add_argument('--src_txt_file', type=str, default=None)
     parser.add_argument('--up_mode', type=str, default="conv", help="切換 Upsample / ConvTranspose2d")
+    parser.add_argument('--g_blur', action='store_true')
+    parser.add_argument('--d_blur', action='store_true')
+    parser.add_argument('--ngf', type=int, default=64, help='generator filters in first conv layer')
+    parser.add_argument('--ndf', type=int, default=64, help='discriminator filters in first conv layer')
     args = parser.parse_args()
     infer(args)

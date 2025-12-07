@@ -32,6 +32,21 @@ def get_unicode_codepoint(char):
         else:
             return ord(char)
 
+class BlurPool(nn.Module):
+    def __init__(self, channels, stride=2):
+        super(BlurPool, self).__init__()
+        self.channels = channels
+        self.stride = stride
+        # Anti-aliasing kernel [1, 2, 1]
+        kernel = torch.tensor([1., 2., 1.])
+        kernel = kernel[:, None] * kernel[None, :]
+        kernel = kernel / kernel.sum()
+        self.register_buffer('kernel', kernel[None, None, :, :].repeat(channels, 1, 1, 1))
+
+    def forward(self, x):
+        # Apply padding to keep size consistent before downsampling
+        return F.conv2d(x, self.kernel, stride=self.stride, padding=1, groups=self.channels)
+
 class SelfAttention(nn.Module):
     def __init__(self, channels):
         super(SelfAttention, self).__init__()
@@ -230,8 +245,20 @@ class UnetSkipConnectionBlock(nn.Module):
         stride = 1 if innermost else 2
         padding = 1
 
-        downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=kernel_size, stride=stride, padding=padding, bias=use_bias)
-        nn.init.kaiming_normal_(downconv.weight, nonlinearity='leaky_relu')
+        if stride == 2 and blur:
+             # Anti-aliased downsampling: Conv(stride=1) -> BlurPool(stride=2)
+             downconv = nn.Sequential(
+                nn.Conv2d(input_nc, inner_nc, kernel_size=kernel_size, stride=1, padding=padding, bias=use_bias),
+                BlurPool(inner_nc, stride=2)
+             )
+        else:
+            downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=kernel_size, stride=stride, padding=padding, bias=use_bias)
+        
+        if not (stride == 2 and blur):
+             nn.init.kaiming_normal_(downconv.weight, nonlinearity='leaky_relu')
+        else:
+             # Initialize the conv inside Sequential
+             nn.init.kaiming_normal_(downconv[0].weight, nonlinearity='leaky_relu')
 
         downrelu = nn.SiLU(inplace=True)
         downnorm = norm_layer(inner_nc)
