@@ -2,10 +2,10 @@ import argparse
 import math
 import os
 import random
+import sys
 import time
 
 import torch
-#torch.autograd.set_detect_anomaly(True)  # 添加異常檢測
 from torch.utils.data import DataLoader
 
 from data import DatasetFromObj
@@ -40,13 +40,14 @@ def setup_google_drive_service():
         print(f"設定 Google Drive 服務時發生錯誤：{e}")
         return None
 
-def train(args):
-    """訓練主函數"""
+def main():
+    args = parser.parse_args()
     random.seed(args.random_seed)
     torch.manual_seed(args.random_seed)
 
     data_dir = args.data_dir or os.path.join(args.experiment_dir, "data")
     checkpoint_dir = args.checkpoint_dir or os.path.join(args.experiment_dir, "checkpoint")
+
     ensure_dir(checkpoint_dir)
 
     print(f"資料目錄：{data_dir}")
@@ -58,24 +59,17 @@ def train(args):
         input_nc=args.input_nc,
         embedding_num=args.embedding_num,
         embedding_dim=args.embedding_dim,
+        ngf=args.ngf,
+        ndf=args.ndf,
         Lconst_penalty=args.Lconst_penalty,
         Lcategory_penalty=args.Lcategory_penalty,
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
+        image_size=args.image_size,
         self_attention=args.self_attention,
-        attention_type=args.attention_type,
-        residual_block=args.residual_block,
-        epoch=args.epoch,
-        g_blur=args.g_blur,
-        d_blur=args.d_blur,
-        lr=args.lr,
-        norm_type=args.norm_type,
-        freeze_downsample=args.freeze_downsample,
-        up_mode=args.up_mode,
-        ngf=args.ngf,
-        ndf=args.ndf
+        use_autocast=args.use_autocast
     )
-
+    model.setup()
     model.print_networks(True)
 
     start_epoch = 0
@@ -85,6 +79,7 @@ def train(args):
         model_loaded = model.load_networks(args.resume)
         if not model_loaded:
             return
+
 
     train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'), input_nc=args.input_nc)
     dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
@@ -101,29 +96,16 @@ def train(args):
             labels, image_B, image_A = batch_data
             model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
             model.set_input(model_input_data)
-
-            losses = model.optimize_parameters(args.use_autocast)
+            const_loss, l1_loss, category_loss, cheat_loss = model.optimize_parameters(use_autocast=args.use_autocast)
             global_steps += 1
 
             if batch_id % 100 == 0:
-                total_elapsed_time_seconds = time.time() - start_time
-                total_elapsed_hours = int(total_elapsed_time_seconds // 3600)
-                total_elapsed_minutes = int((total_elapsed_time_seconds % 3600) // 60)
-                total_elapsed_seconds = int(total_elapsed_time_seconds % 60)
-
-                time_str = ""
-                if total_elapsed_hours > 0:
-                    time_str += f"{total_elapsed_hours}h "
-                if total_elapsed_minutes > 0:
-                    time_str += f"{total_elapsed_minutes}m "
-                time_str += f"{total_elapsed_seconds}s"
-
-                print(
-                    f"Epoch: [{epoch:3d}], Batch: [{batch_id:4d}/{total_batches:4d}] | Total Time: {time_str}\n"
-                    f" d_loss: {losses['d_loss']:.4f}, g_loss:  {losses['g_loss']:.4f}, "
-                    f"const_loss: {losses['const']:.4f}, l1_loss: {losses['l1']:.4f}, fm_loss: {losses['fm']:.4f}, perc_loss: {losses['perc']:.4f}, edge: {losses['edge']:.4f}"
-                )
-
+                passed = time.time() - start_time
+                log_format = "Epoch: [%2d], [%4d/%4d] time: %4.2f, d_loss: %.5f, g_loss: %.5f, " + \
+                             "category_loss: %.5f, cheat_loss: %.5f, const_loss: %.5f, l1_loss: %.5f"
+                print(log_format % (epoch, batch_id, total_batches, passed, model.d_loss.item(), model.g_loss.item(),
+                                    category_loss.item(), cheat_loss.item(), const_loss.item(), l1_loss.item()))
+            
             # --- Checkpointing ---
             if global_steps % args.checkpoint_steps == 0:
                 if global_steps >= args.checkpoint_steps_after:
@@ -143,17 +125,13 @@ def train(args):
                 else:
                     print(f"Checkpoint step {global_steps} reached, but saving starts after step {args.checkpoint_steps_after}.")
 
-
         # --- End of Epoch ---
         epoch_time = time.time() - epoch_start_time
         print(f"--- End of Epoch {epoch} --- Time: {epoch_time:.1f}s ---")
 
-        # Update Learning Rate Schedulers
-        model.scheduler_G.step()
-        model.scheduler_D.step()
-        print(f"LR Scheduler stepped. Current LR G: {model.scheduler_G.get_last_lr()[0]:.6f}, LR D: {model.scheduler_D.get_last_lr()[0]:.6f}")
-
-
+        if (epoch + 1) % args.schedule == 0:
+            model.update_lr()
+    
     # --- End of Training ---
     print("\n--- Training Finished ---")
     # Save the final model state
@@ -167,34 +145,34 @@ def train(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train')
-    parser.add_argument('--attention_type', type=str, default="linear", help="切換 Attention 的類型")
     parser.add_argument('--batch_size', type=int, default=16, help='number of examples in batch')
     parser.add_argument('--checkpoint_dir', type=str, default=None, help='overwrite checkpoint dir path, if data dir is not same with checkpoint dir')
     parser.add_argument('--checkpoint_only_last', action='store_true', help='remove all previous versions, only keep last version')
     parser.add_argument('--checkpoint_steps', type=int, default=100, help='number of batches in between two checkpoints')
     parser.add_argument('--checkpoint_steps_after', type=int, default=1, help='save the number of batches after')
-    parser.add_argument('--d_blur', action='store_true')
     parser.add_argument('--data_dir', type=str, default=None, help='overwrite data dir path, if data dir is not same with checkpoint dir')
-    parser.add_argument('--embedding_dim', type=int, default=64, help="dimension for embedding")
-    parser.add_argument('--embedding_num', type=int, default=2, help="number for distinct embeddings")
+    parser.add_argument('--embedding_dim', type=int, default=128, help="dimension for embedding")
+    parser.add_argument('--embedding_num', type=int, default=40, help="number for distinct embeddings")
     parser.add_argument('--epoch', type=int, default=100, help='number of epoch')
     parser.add_argument('--experiment_dir', required=True, help='experiment directory, data, samples,checkpoints,etc')
-    parser.add_argument('--g_blur', action='store_true')
+    parser.add_argument('--fine_tune', type=str, default=None, help='specific labels id to be fine tuned')
+    parser.add_argument('--flip_labels', action='store_true', help='whether flip training data labels or not, in fine tuning')
+    parser.add_argument('--freeze_encoder', action='store_true', help="freeze encoder weights during training")
     parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
+    parser.add_argument('--image_size', type=int, default=256, help="size of your input and output image")
     parser.add_argument('--input_nc', type=int, default=1, help='number of input images channels')
+    parser.add_argument('--inst_norm', action='store_true', help='use conditional instance normalization in your model')
     parser.add_argument('--L1_penalty', type=int, default=100, help='weight for L1 loss')
     parser.add_argument('--Lcategory_penalty', type=float, default=1.0, help='weight for category loss')
     parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
-    parser.add_argument('--norm_type', type=str, default="instance", help='normalization type: instance or batch')
     parser.add_argument('--random_seed', type=int, default=777, help='random seed for random and pytorch')
-    parser.add_argument('--residual_block', action='store_true')
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
-    parser.add_argument('--self_attention', action='store_true')
-    parser.add_argument('--use_autocast', action="store_true", help='Enable autocast for mixed precision training')
-    parser.add_argument('--up_mode', type=str, default="conv", help="切換 upsample / conv / pixelshuffle")
-    parser.add_argument('--freeze_downsample', action='store_true')
+    parser.add_argument('--sample_steps', type=int, default=10, help='number of batches in between two samples are drawn from validation set')
+    parser.add_argument('--schedule', type=int, default=20, help='number of epochs to half learning rate')
+    parser.add_argument('--self_attention', action='store_true', help='use self attention in generator')
+    parser.add_argument('--use_autocast', action='store_true', help='Enable autocast for mixed precision training')
     parser.add_argument('--ngf', type=int, default=64, help='generator filters in first conv layer')
     parser.add_argument('--ndf', type=int, default=64, help='discriminator filters in first conv layer')
-    args = parser.parse_args()
-    train(args)
+
+    main()

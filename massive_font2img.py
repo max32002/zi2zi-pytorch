@@ -58,7 +58,7 @@ def draw_single_char(ch, font, canvas_size, x_offset=0, y_offset=0):
     # img = nn.ZeroPad2d(m)(img) #直接填0
     img = img.squeeze(0)  # 去轴
     img = transforms.ToPILImage()(img)
-    img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
+    img = img.resize((canvas_size, canvas_size), Image.ANTIALIAS)
     return img
 
 
@@ -145,5 +145,5 @@ if __name__ == "__main__":
                 else:
                     continue
                 if img is not None:
-                    img.save(os.path.join(args.sample_dir, '%d_%05d.png' % (idx, cur)))
+                    img.save(os.path.join(args.sample_dir, '%d_%04d.png' % (idx, cur)))
                     cur += 1

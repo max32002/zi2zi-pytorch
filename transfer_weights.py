@@ -1,8 +1,11 @@
+import argparse
 import os
+
 import torch
 import torch.nn as nn
-import argparse
+
 from model.model import UNetGenerator
+
 
 def get_layer_level(key):
     return len(key.split('.'))

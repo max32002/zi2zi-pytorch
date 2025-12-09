@@ -1,5 +1,7 @@
 import argparse
+import math
 import os
+import random
 import time
 
 import cv2
@@ -8,7 +10,9 @@ import torch
 import torchvision.transforms as transforms
 from PIL import Image, ImageDraw, ImageFont
 from torch.utils.data import DataLoader, TensorDataset
+from torchvision.utils import make_grid, save_image
 
+from data import DatasetFromObj
 from model import Zi2ZiModel
 
 
@@ -74,18 +78,18 @@ def infer(args):
     print(f"Access checkpoint object at path: {checkpoint_dir}")
 
     model = Zi2ZiModel(
-        input_nc=args.input_nc, embedding_num=args.embedding_num, embedding_dim=args.embedding_dim,
-        Lconst_penalty=args.Lconst_penalty, Lcategory_penalty=args.Lcategory_penalty, save_dir=checkpoint_dir,
-        gpu_ids=args.gpu_ids, 
-        self_attention=args.self_attention,
-        attention_type=args.attention_type,
-        residual_block=args.residual_block, 
-        up_mode=args.up_mode,
-        is_training=False,
-        g_blur=args.g_blur,
-        d_blur=args.d_blur,
+        input_nc=args.input_nc,
+        embedding_num=args.embedding_num,
+        embedding_dim=args.embedding_dim,
         ngf=args.ngf,
-        ndf=args.ndf
+        ndf=args.ndf,
+        Lconst_penalty=args.Lconst_penalty,
+        Lcategory_penalty=args.Lcategory_penalty,
+        save_dir=checkpoint_dir,
+        gpu_ids=args.gpu_ids,
+        image_size=args.image_size,
+        is_training=False,
+        self_attention=args.self_attention
     )
     model.print_networks(True)
     if not model.load_networks(args.resume):
@@ -119,25 +123,22 @@ def infer(args):
     t_finish = time.time()
     print(f'Cold start time: {t_finish - t0:.2f}')
 
-    # for convert model.
-    #model.save_networks('converted')
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Infer')
     parser.add_argument('--anti_alias', type=int, default=0)
-    parser.add_argument('--attention_type', type=str, default="linear", help="切換 Attention 的類型")
     parser.add_argument('--batch_size', type=int, default=16, help='number of examples in batch')
     parser.add_argument('--canvas_size', type=int, default=256)
     parser.add_argument('--char_size', type=int, default=256)
     parser.add_argument('--checkpoint_dir', type=str, default=None, help='overwrite checkpoint dir path')
     parser.add_argument('--crop_src_font', action='store_true')
-    parser.add_argument('--embedding_dim', type=int, default=64, help="dimension for embedding")
-    parser.add_argument('--embedding_num', type=int, default=2, help="number for distinct embeddings")
+    parser.add_argument('--embedding_dim', type=int, default=128, help="dimension for embedding")
+    parser.add_argument('--embedding_num', type=int, default=40, help="number for distinct embeddings")
     parser.add_argument('--experiment_dir', required=True, help='experiment directory, data, samples,checkpoints,etc')
     parser.add_argument('--filename_rule', type=str, default="unicode_int", choices=['seq', 'char', 'unicode_int', 'unicode_hex'])
     parser.add_argument('--from_txt', action='store_true')
     parser.add_argument('--gpu_ids', default=[], nargs='+', help="GPUs")
     parser.add_argument('--image_ext', type=str, default='png', help='infer image format')
+    parser.add_argument('--image_size', type=int, default=256, help="size of your input and output image")
     parser.add_argument('--infer_dir', type=str, default=None, help='overwrite infer dir path')
     parser.add_argument('--input_nc', type=int, default=1)
     parser.add_argument('--L1_penalty', type=int, default=100, help='weight for L1 loss')
@@ -145,19 +146,18 @@ if __name__ == '__main__':
     parser.add_argument('--Lcategory_penalty', type=float, default=1.0, help='weight for category loss')
     parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
-    parser.add_argument('--residual_block', action='store_true')
     parser.add_argument('--resize_canvas', type=int, default=0)
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
-    parser.add_argument('--self_attention', action='store_true')
+    parser.add_argument('--run_all_label', action='store_true')
+    parser.add_argument('--self_attention', action='store_true', help='use self attention in generator')
     parser.add_argument('--skip_exist', action='store_true')
+
     parser.add_argument('--src_font', type=str, default='')
     parser.add_argument('--src_font_x_offset', type=int, default=0)
     parser.add_argument('--src_font_y_offset', type=int, default=0)
     parser.add_argument('--src_txt', type=str, default='')
     parser.add_argument('--src_txt_file', type=str, default=None)
-    parser.add_argument('--up_mode', type=str, default="conv", help="切換 Upsample / ConvTranspose2d")
-    parser.add_argument('--g_blur', action='store_true')
-    parser.add_argument('--d_blur', action='store_true')
+
     parser.add_argument('--ngf', type=int, default=64, help='generator filters in first conv layer')
     parser.add_argument('--ndf', type=int, default=64, help='discriminator filters in first conv layer')
     args = parser.parse_args()

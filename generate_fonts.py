@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-#encoding=utf-8
+
 import argparse
 import json
 import os
@@ -70,7 +69,7 @@ def draw_single_char(ch, font, canvas_size):
     # img = nn.ZeroPad2d(m)(img) #直接填0
     img = img.squeeze(0)  # 去轴
     img = transforms.ToPILImage()(img)
-    img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
+    img = img.resize((canvas_size, canvas_size), Image.ANTIALIAS)
     return img
 
 
