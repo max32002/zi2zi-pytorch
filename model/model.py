@@ -29,7 +29,7 @@ def get_unicode_codepoint(char):
             return ord(char)
 
 class Zi2ZiModel:
-    def __init__(self, input_nc=3, embedding_num=40, embedding_dim=128,
+    def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128,
                  ngf=64, ndf=64,
                  Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,

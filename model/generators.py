@@ -9,7 +9,7 @@ from torch.optim import lr_scheduler
 class UNetGenerator(nn.Module):
     """Create a Unet-based generator"""
 
-    def __init__(self, input_nc=3, output_nc=3, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
+    def __init__(self, input_nc=1, output_nc=1, num_downs=8, ngf=64, embedding_num=40, embedding_dim=128,
                  norm_layer=nn.BatchNorm2d, use_dropout=False, self_attention=False):
         """
         Construct a Unet generator

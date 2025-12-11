@@ -101,8 +101,8 @@ def main():
 
             if batch_id % 100 == 0:
                 passed = time.time() - start_time
-                log_format = "Epoch: [%2d], [%4d/%4d] time: %4.2f, d_loss: %.5f, g_loss: %.5f, " + \
-                             "category_loss: %.5f, cheat_loss: %.5f, const_loss: %.5f, l1_loss: %.5f"
+                log_format = "Epoch: [%2d], [%4d/%4d] time: %5d, d_loss: %.4f, g_loss: %.4f, " + \
+                             "category_loss: %.4f, cheat_loss: %.4f, const_loss: %.4f, l1_loss: %.4f"
                 print(log_format % (epoch, batch_id, total_batches, passed, model.d_loss.item(), model.g_loss.item(),
                                     category_loss.item(), cheat_loss.item(), const_loss.item(), l1_loss.item()))
             
@@ -127,7 +127,7 @@ def main():
 
         # --- End of Epoch ---
         epoch_time = time.time() - epoch_start_time
-        print(f"--- End of Epoch {epoch} --- Time: {epoch_time:.1f}s ---")
+        print(f"--- End of Epoch {epoch} --- Time: {epoch_time:.0f}s ---")
 
         if (epoch + 1) % args.schedule == 0:
             model.update_lr()
