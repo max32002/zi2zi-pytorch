@@ -63,11 +63,13 @@ def main():
         ndf=args.ndf,
         Lconst_penalty=args.Lconst_penalty,
         Lcategory_penalty=args.Lcategory_penalty,
+        L1_penalty=args.L1_penalty,
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
         image_size=args.image_size,
         self_attention=args.self_attention,
-        use_autocast=args.use_autocast
+        use_autocast=args.use_autocast,
+        lr=args.lr
     )
     model.setup()
     model.print_networks(True)
@@ -168,7 +170,6 @@ if __name__ == '__main__':
     parser.add_argument('--random_seed', type=int, default=777, help='random seed for random and pytorch')
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
     parser.add_argument('--sample_steps', type=int, default=10, help='number of batches in between two samples are drawn from validation set')
-    parser.add_argument('--schedule', type=int, default=20, help='number of epochs to half learning rate')
     parser.add_argument('--self_attention', action='store_true', help='use self attention in generator')
     parser.add_argument('--use_autocast', action='store_true', help='Enable autocast for mixed precision training')
     parser.add_argument('--ngf', type=int, default=64, help='generator filters in first conv layer')

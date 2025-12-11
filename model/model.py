@@ -216,30 +216,14 @@ class Zi2ZiModel:
         self.optimizer_G.zero_grad(set_to_none=True)  # set G's gradients to zero
         
         with torch.amp.autocast('cuda', enabled=use_autocast):
-            self.backward_G(use_autocast=use_autocast)  # calculate gradients for G
-            
-        if use_autocast:
-            self.scaler.step(self.optimizer_G)
-        else:
-             self.optimizer_G.step()  # udpate G's weights
-
-        # magic move to Optimize G again
-        # according to https://github.com/carpedm20/DCGAN-tensorflow
-        # collect all the losses along the way
-        with torch.amp.autocast('cuda', enabled=use_autocast):
-            self.forward()  # compute fake images: G(A)
-            
-        self.optimizer_G.zero_grad(set_to_none=True)  # set G's gradients to zero
-        
-        with torch.amp.autocast('cuda', enabled=use_autocast):
             const_loss, l1_loss, cheat_loss = self.backward_G(use_autocast=use_autocast)  # calculate gradients for G
             
         if use_autocast:
             self.scaler.step(self.optimizer_G)
-            self.scaler.update() 
+            self.scaler.update()
         else:
-            self.optimizer_G.step()  # udpate G's weights
-            
+             self.optimizer_G.step()  # udpate G's weights
+
         return const_loss, l1_loss, category_loss, cheat_loss
 
     def set_requires_grad(self, nets, requires_grad=False):
