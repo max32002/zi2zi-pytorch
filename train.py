@@ -129,8 +129,7 @@ def main():
         epoch_time = time.time() - epoch_start_time
         print(f"--- End of Epoch {epoch} --- Time: {epoch_time:.0f}s ---")
 
-        if (epoch + 1) % args.schedule == 0:
-            model.update_lr()
+        model.update_lr()
     
     # --- End of Training ---
     print("\n--- Training Finished ---")
