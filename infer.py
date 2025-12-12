@@ -89,7 +89,8 @@ def infer(args):
         gpu_ids=args.gpu_ids,
         image_size=args.image_size,
         is_training=False,
-        self_attention=args.self_attention
+        self_attention=args.self_attention,
+        d_spectral_norm=args.d_spectral_norm
     )
     model.print_networks(True)
     if not model.load_networks(args.resume):
@@ -160,5 +161,6 @@ if __name__ == '__main__':
 
     parser.add_argument('--ngf', type=int, default=64, help='generator filters in first conv layer')
     parser.add_argument('--ndf', type=int, default=64, help='discriminator filters in first conv layer')
+    parser.add_argument('--d_spectral_norm', action='store_true', help='use spectral normalization in discriminator')
     args = parser.parse_args()
     infer(args)

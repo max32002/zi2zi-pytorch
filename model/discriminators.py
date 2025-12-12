@@ -10,7 +10,7 @@ from torch.optim import lr_scheduler
 class Discriminator(nn.Module):
     """Defines a PatchGAN discriminator"""
 
-    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256):
+    def __init__(self, input_nc, embedding_num, ndf=64, norm_layer=nn.BatchNorm2d, image_size=256, use_spectral_norm=False):
         """Construct a PatchGAN discriminator
         Parameters:
             input_nc (int)  -- the number of channels in input images
@@ -28,8 +28,15 @@ class Discriminator(nn.Module):
         # padw = 1
         kw = 5
         padw = 2
+
+        def get_conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=True):
+            conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=bias)
+            if use_spectral_norm:
+                return nn.utils.spectral_norm(conv)
+            return conv
+
         sequence = [
-            nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw),
+            get_conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw, bias=True),
             nn.LeakyReLU(0.2, True)
         ]
         nf_mult = 1
@@ -40,7 +47,7 @@ class Discriminator(nn.Module):
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
             sequence += [
-                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias),
+                get_conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias),
                 norm_layer(ndf * nf_mult),
                 nn.LeakyReLU(0.2, True)
             ]
@@ -48,14 +55,14 @@ class Discriminator(nn.Module):
         nf_mult_prev = nf_mult
         nf_mult = 8
         sequence += [
-            nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
+            get_conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias),
             norm_layer(ndf * nf_mult),
             nn.LeakyReLU(0.2, True)
         ]
 
         # Maybe useful? Experiment need to be done later.
         # output 1 channel prediction map
-        sequence += [nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]
+        sequence += [get_conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw, bias=True)]
 
         self.model = nn.Sequential(*sequence)
         # final_channels = ndf * nf_mult
@@ -67,8 +74,13 @@ class Discriminator(nn.Module):
         # 524288 = 512(num_of_channels) * (w/2/2/2) * (h/2/2/2) = 2^19  (w=h=256)
         # 131072 = 512(num_of_channels) * (w/2/2/2) * (h/2/2/2) = 2^17  (w=h=128)
         final_features = final_channels * image_size * image_size
-        self.binary = nn.Linear(final_features, 1)
-        self.catagory = nn.Linear(final_features, embedding_num)
+        
+        if use_spectral_norm:
+             self.binary = nn.utils.spectral_norm(nn.Linear(final_features, 1))
+             self.catagory = nn.utils.spectral_norm(nn.Linear(final_features, embedding_num))
+        else:
+             self.binary = nn.Linear(final_features, 1)
+             self.catagory = nn.Linear(final_features, embedding_num)
 
     def forward(self, input):
         """Standard forward."""

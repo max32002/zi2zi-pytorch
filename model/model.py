@@ -14,7 +14,7 @@ from utils.init_net import init_net
 
 from .discriminators import Discriminator
 from .generators import UNetGenerator
-from .losses import BinaryLoss, CategoryLoss
+from .losses import BinaryLoss, CategoryLoss, PerceptualLoss
 
 def get_unicode_codepoint(char):
     if sys.maxunicode >= 0x10FFFF:
@@ -31,9 +31,9 @@ def get_unicode_codepoint(char):
 class Zi2ZiModel:
     def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128,
                  ngf=64, ndf=64,
-                 Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
+                 Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100, Lperceptual_penalty=0.0,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
-                 image_size=256, self_attention=False, use_autocast=False):
+                 image_size=256, self_attention=False, d_spectral_norm=False):
 
         self.gpu_ids = gpu_ids
         self.device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
@@ -45,7 +45,10 @@ class Zi2ZiModel:
 
         self.Lconst_penalty = Lconst_penalty
         self.Lcategory_penalty = Lcategory_penalty
+        self.Lconst_penalty = Lconst_penalty
+        self.Lcategory_penalty = Lcategory_penalty
         self.L1_penalty = L1_penalty
+        self.Lperceptual_penalty = Lperceptual_penalty
 
         self.schedule = schedule
 
@@ -61,7 +64,7 @@ class Zi2ZiModel:
         self.is_training = is_training
         self.image_size = image_size
         self.self_attention = self_attention
-        self.use_autocast = use_autocast
+        self.d_spectral_norm = d_spectral_norm
 
         self.setup()
 
@@ -86,7 +89,8 @@ class Zi2ZiModel:
             input_nc=2 * self.input_nc,
             embedding_num=self.embedding_num,
             ndf=self.ndf,
-            image_size=self.image_size
+            image_size=self.image_size,
+            use_spectral_norm=self.d_spectral_norm
         )
 
         init_net(self.netG, gpu_ids=self.gpu_ids)
@@ -98,7 +102,9 @@ class Zi2ZiModel:
         self.category_loss = CategoryLoss(self.embedding_num)
         self.real_binary_loss = BinaryLoss(True)
         self.fake_binary_loss = BinaryLoss(False)
+        self.fake_binary_loss = BinaryLoss(False)
         self.l1_loss = nn.L1Loss()
+        self.perceptual_loss = PerceptualLoss()
         self.mse = nn.MSELoss()
         self.sigmoid = nn.Sigmoid()
 
@@ -106,125 +112,122 @@ class Zi2ZiModel:
             self.category_loss.cuda()
             self.real_binary_loss.cuda()
             self.fake_binary_loss.cuda()
+            self.fake_binary_loss.cuda()
             self.l1_loss.cuda()
+            self.perceptual_loss.cuda()
             self.mse.cuda()
             self.sigmoid.cuda()
 
         if self.is_training:
             self.netD.train()
             self.netG.train()
-            # Default enabled=False, can be overridden by use_autocast
-            self.scaler = torch.amp.GradScaler('cuda', enabled=self.use_autocast)
         else:
             self.netD.eval()
             self.netG.eval()
 
     def set_input(self, data):
+        self.model_input_data = data
         self.labels = data['label'].to(self.device)
         self.real_A = data['A'].to(self.device) # Input font image
         self.real_B = data['B'].to(self.device) # Target font image
 
-    def forward(self):
-        # generate fake_B
+    def forward(self, data):
+        real_A = data['A'].to(self.device)
+        real_B = data['B'].to(self.device)
+        labels = data['label'].to(self.device)
 
-        self.fake_B, self.encoded_real_A = self.netG(self.real_A, self.labels)
-        self.encoded_fake_B = self.netG(self.fake_B).view(self.fake_B.shape[0], -1)
+        # 生成器 forward（取得 fake_B 及 deep feature）
+        fake_B, fake_B_emb = self.netG(real_A, labels, return_feat=True)
 
-    def backward_D(self, no_target_source=False, use_autocast=False):
+        # 取得 real_B 的 embedding
+        _, real_B_emb = self.netG(real_B, labels, return_feat=True)
 
-        real_AB = torch.cat([self.real_A, self.real_B], 1)
-        fake_AB = torch.cat([self.real_A, self.fake_B], 1)
+        ##############################################
+        # 1) Reconstruction loss
+        ##############################################
+        self.loss_l1 = self.l1_loss(fake_B, real_B)
 
-        real_D_logits, real_category_logits = self.netD(real_AB)
-        fake_D_logits, fake_category_logits = self.netD(fake_AB.detach())
-
-        real_category_loss = self.category_loss(real_category_logits, self.labels)
-        fake_category_loss = self.category_loss(fake_category_logits, self.labels)
-        category_loss = (real_category_loss + fake_category_loss) * self.Lcategory_penalty
-
-        d_loss_real = self.real_binary_loss(real_D_logits)
-        d_loss_fake = self.fake_binary_loss(fake_D_logits)
-
-        self.d_loss = d_loss_real + d_loss_fake + category_loss / 2.0
+        ##############################################
+        # 2) Feature Constancy loss（使用 embedding，不再第二次 forward）
+        ##############################################
+        self.loss_const = self.l1_loss(fake_B_emb, real_B_emb)
         
-        if use_autocast:
-            self.scaler.scale(self.d_loss).backward()
+        ##############################################
+        # 3) Perceptual loss
+        ##############################################
+        if self.Lperceptual_penalty > 0:
+            self.loss_perceptual = self.perceptual_loss(fake_B, real_B)
         else:
-            self.d_loss.backward()
-            
-        return category_loss
+            self.loss_perceptual = torch.tensor(0.0).to(self.device)
 
-    def backward_G(self, no_target_source=False, use_autocast=False):
+        # Store for access
+        self.fake_B = fake_B
+        self.encoded_fake_B = fake_B_emb
+        self.labels = labels
+        self.real_A = real_A
+        self.real_B = real_B
 
-        fake_AB = torch.cat([self.real_A, self.fake_B], 1)
-        fake_D_logits, fake_category_logits = self.netD(fake_AB)
+        return {
+            "fake_B": fake_B,
+            "fake_B_emb": fake_B_emb,
+            "real_B_emb": real_B_emb
+        }
 
-        # encoding constant loss
-        # this loss assume that generated imaged and real image should reside in the same space and close to each other
-        const_loss = self.Lconst_penalty * self.mse(self.encoded_real_A, self.encoded_fake_B)
-        # L1 loss between real and generated images
-        l1_loss = self.L1_penalty * self.l1_loss(self.fake_B, self.real_B)
-        fake_category_loss = self.Lcategory_penalty * self.category_loss(fake_category_logits, self.labels)
-
-        cheat_loss = self.real_binary_loss(fake_D_logits)
-
-        self.g_loss = cheat_loss + l1_loss + fake_category_loss + const_loss
+    def optimize_parameters(self):
+        # 1. Forward G
+        self.forward(self.model_input_data)
         
-        if use_autocast:
-            self.scaler.scale(self.g_loss).backward()
-        else:
-            self.g_loss.backward()
-            
-        return const_loss, l1_loss, cheat_loss
+        real_A = self.real_A
+        real_B = self.real_B
+        fake_B = self.fake_B
+        labels = self.labels
 
-    def update_lr(self):
-        # There should be only one param_group.
-        for p in self.optimizer_D.param_groups:
-            current_lr = p['lr']
-            update_lr = current_lr * 0.99
-            # minimum learning rate guarantee
-            update_lr = max(update_lr, 0.0002)
-            p['lr'] = update_lr
-            print("Decay net_D learning rate from %.6f to %.6f." % (current_lr, update_lr))
+        fake_AB = torch.cat([real_A, fake_B], 1)
+        real_AB = torch.cat([real_A, real_B], 1)
 
-        for p in self.optimizer_G.param_groups:
-            current_lr = p['lr']
-            update_lr = current_lr * 0.99
-            # minimum learning rate guarantee
-            update_lr = max(update_lr, 0.0002)
-            p['lr'] = update_lr
-            print("Decay net_G learning rate from %.6f to %.6f." % (current_lr, update_lr))
-
-    def optimize_parameters(self, use_autocast=False):
-        with torch.amp.autocast('cuda', enabled=use_autocast):
-            self.forward()  # compute fake images: G(A)
-            
-        # update D
-        self.set_requires_grad(self.netD, True)  # enable backprop for D
-        self.optimizer_D.zero_grad(set_to_none=True)  # set D's gradients to zero
+        # 2. Update D
+        self.set_requires_grad(self.netD, True)
+        self.optimizer_D.zero_grad(set_to_none=True)
         
-        with torch.amp.autocast('cuda', enabled=use_autocast):
-            category_loss = self.backward_D(use_autocast=use_autocast)  # calculate gradients for D
-            
-        if use_autocast:
-            self.scaler.step(self.optimizer_D)
-        else:
-            self.optimizer_D.step()  # update D's weights
-            
-        # update G
-        self.set_requires_grad(self.netD, False)  # D requires no gradients when optimizing G
-        self.optimizer_G.zero_grad(set_to_none=True)  # set G's gradients to zero
+        # Forward D with detached fake
+        pred_fake_d, fake_category_logits_d = self.netD(fake_AB.detach())
+        pred_real, real_category_logits = self.netD(real_AB)
         
-        with torch.amp.autocast('cuda', enabled=use_autocast):
-            const_loss, l1_loss, cheat_loss = self.backward_G(use_autocast=use_autocast)  # calculate gradients for G
-            
-        if use_autocast:
-            self.scaler.step(self.optimizer_G)
-            self.scaler.update()
-        else:
-             self.optimizer_G.step()  # udpate G's weights
+        loss_D_real = self.real_binary_loss(pred_real)
+        loss_D_fake = self.fake_binary_loss(pred_fake_d)
+        
+        real_category_loss = self.category_loss(real_category_logits, labels)
+        fake_category_loss_d = self.category_loss(fake_category_logits_d, labels)
+        self.category_loss_D = (real_category_loss + fake_category_loss_d) * self.Lcategory_penalty
+        
+        self.d_loss = (loss_D_real + loss_D_fake) * 0.5 + self.category_loss_D * 0.5
+        self.d_loss.backward()
+        self.optimizer_D.step()
 
-        return const_loss, l1_loss, category_loss, cheat_loss
+        # 3. Update G
+        self.set_requires_grad(self.netD, False)
+        self.optimizer_G.zero_grad(set_to_none=True)
+        
+        # Forward D again with attached fake (using updated weights is standard, or use retained graph?)
+        # Standard GAN training uses updated D for G loss.
+        pred_fake, fake_category_logits = self.netD(fake_AB)
+        
+        self.loss_G_GAN = self.real_binary_loss(pred_fake)
+        fake_category_loss_G = self.category_loss(fake_category_logits, labels) * self.Lcategory_penalty
+        
+        self.g_loss = (
+            self.loss_G_GAN +
+            self.loss_l1 * self.L1_penalty +
+            self.loss_const * self.Lconst_penalty +
+            self.loss_perceptual * self.Lperceptual_penalty + 
+            fake_category_loss_G
+        )
+        
+        self.g_loss.backward()
+        self.optimizer_G.step()
+
+        # Return losses for logging
+        return self.loss_const, self.loss_l1, self.category_loss_D, self.loss_G_GAN, self.loss_perceptual
 
     def set_requires_grad(self, nets, requires_grad=False):
         """Set requies_grad=Fasle for all the networks to avoid unnecessary computations
@@ -425,7 +428,7 @@ class Zi2ZiModel:
             labels, image_B, image_A = batch_data
             model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
             self.set_input(model_input_data)
-            self.forward()
+            self.forward(model_input_data)
 
             output_images = torch.cat([self.fake_B, self.real_B], 3)
             for i, (label, image_tensor) in enumerate(zip(batch_data[0], output_images)):

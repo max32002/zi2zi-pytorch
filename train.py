@@ -64,11 +64,12 @@ def main():
         Lconst_penalty=args.Lconst_penalty,
         Lcategory_penalty=args.Lcategory_penalty,
         L1_penalty=args.L1_penalty,
+        Lperceptual_penalty=args.Lperceptual_penalty,
         save_dir=checkpoint_dir,
         gpu_ids=args.gpu_ids,
         image_size=args.image_size,
         self_attention=args.self_attention,
-        use_autocast=args.use_autocast,
+        d_spectral_norm=args.d_spectral_norm,
         lr=args.lr
     )
     model.setup()
@@ -98,15 +99,15 @@ def main():
             labels, image_B, image_A = batch_data
             model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
             model.set_input(model_input_data)
-            const_loss, l1_loss, category_loss, cheat_loss = model.optimize_parameters(use_autocast=args.use_autocast)
+            const_loss, l1_loss, category_loss, cheat_loss, perceptual_loss = model.optimize_parameters()
             global_steps += 1
 
             if batch_id % 100 == 0:
                 passed = time.time() - start_time
                 log_format = "Epoch: [%2d], [%4d/%4d] time: %5d, d_loss: %.4f, g_loss: %.4f, " + \
-                             "category_loss: %.4f, cheat_loss: %.4f, const_loss: %.4f, l1_loss: %.4f"
+                             "category_loss: %.4f, cheat_loss: %.4f, const_loss: %.4f, l1_loss: %.4f, per_loss: %.4f"
                 print(log_format % (epoch, batch_id, total_batches, passed, model.d_loss.item(), model.g_loss.item(),
-                                    category_loss.item(), cheat_loss.item(), const_loss.item(), l1_loss.item()))
+                                    category_loss.item(), cheat_loss.item(), const_loss.item(), l1_loss.item(), perceptual_loss.item()))
             
             # --- Checkpointing ---
             if global_steps % args.checkpoint_steps == 0:
@@ -166,13 +167,14 @@ if __name__ == '__main__':
     parser.add_argument('--L1_penalty', type=int, default=100, help='weight for L1 loss')
     parser.add_argument('--Lcategory_penalty', type=float, default=1.0, help='weight for category loss')
     parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
+    parser.add_argument('--Lperceptual_penalty', type=float, default=0.0, help='weight for perceptual loss')
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
     parser.add_argument('--random_seed', type=int, default=777, help='random seed for random and pytorch')
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
     parser.add_argument('--sample_steps', type=int, default=10, help='number of batches in between two samples are drawn from validation set')
     parser.add_argument('--self_attention', action='store_true', help='use self attention in generator')
-    parser.add_argument('--use_autocast', action='store_true', help='Enable autocast for mixed precision training')
     parser.add_argument('--ngf', type=int, default=64, help='generator filters in first conv layer')
     parser.add_argument('--ndf', type=int, default=64, help='discriminator filters in first conv layer')
+    parser.add_argument('--d_spectral_norm', action='store_true', help='use spectral normalization in discriminator')
 
     main()
