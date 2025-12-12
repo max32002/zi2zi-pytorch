@@ -229,6 +229,24 @@ class Zi2ZiModel:
         # Return losses for logging
         return self.loss_const, self.loss_l1, self.category_loss_D, self.loss_G_GAN, self.loss_perceptual
 
+    def update_lr(self):
+        # There should be only one param_group.
+        for p in self.optimizer_D.param_groups:
+            current_lr = p['lr']
+            update_lr = current_lr * 0.99
+            # minimum learning rate guarantee
+            update_lr = max(update_lr, 0.0002)
+            p['lr'] = update_lr
+            print("Decay net_D learning rate from %.6f to %.6f." % (current_lr, update_lr))
+
+        for p in self.optimizer_G.param_groups:
+            current_lr = p['lr']
+            update_lr = current_lr * 0.99
+            # minimum learning rate guarantee
+            update_lr = max(update_lr, 0.0002)
+            p['lr'] = update_lr
+            print("Decay net_G learning rate from %.6f to %.6f." % (current_lr, update_lr))
+
     def set_requires_grad(self, nets, requires_grad=False):
         """Set requies_grad=Fasle for all the networks to avoid unnecessary computations
         Parameters:
