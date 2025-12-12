@@ -1,3 +1,4 @@
+import functools
 import os
 import subprocess
 import sys
@@ -14,7 +15,7 @@ from utils.init_net import init_net
 
 from .discriminators import Discriminator
 from .generators import UNetGenerator
-from .losses import BinaryLoss, CategoryLoss, PerceptualLoss
+from .losses import BinaryLoss, CategoryLoss
 
 def get_unicode_codepoint(char):
     if sys.maxunicode >= 0x10FFFF:
@@ -31,9 +32,9 @@ def get_unicode_codepoint(char):
 class Zi2ZiModel:
     def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128,
                  ngf=64, ndf=64,
-                 Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100, Lperceptual_penalty=0.0,
+                 Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
-                 image_size=256, self_attention=False, d_spectral_norm=False):
+                 image_size=256, self_attention=False, d_spectral_norm=False, norm_type="instance"):
 
         self.gpu_ids = gpu_ids
         self.device = torch.device("cuda" if self.gpu_ids and torch.cuda.is_available() else "cpu")
@@ -48,7 +49,7 @@ class Zi2ZiModel:
         self.Lconst_penalty = Lconst_penalty
         self.Lcategory_penalty = Lcategory_penalty
         self.L1_penalty = L1_penalty
-        self.Lperceptual_penalty = Lperceptual_penalty
+
 
         self.schedule = schedule
 
@@ -65,15 +66,21 @@ class Zi2ZiModel:
         self.image_size = image_size
         self.self_attention = self_attention
         self.d_spectral_norm = d_spectral_norm
+        self.norm_type = norm_type
 
         self.setup()
 
     def setup(self):
-
-        if self.image_size == 384:
-            num_downs = 7
+        # choose norm
+        if self.norm_type == 'batch':
+            norm_layer = nn.BatchNorm2d
+        elif self.norm_type == 'instance':
+            norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
         else:
-            num_downs = 8
+            raise NotImplementedError('normalization layer [%s] is not found' % self.norm_type)
+
+        # build nets (assumes UNetGenerator and Discriminator are defined and imported)
+        num_downs = 8 if self.image_size != 384 else 7
 
         self.netG = UNetGenerator(
             input_nc=self.input_nc,
@@ -81,17 +88,20 @@ class Zi2ZiModel:
             embedding_num=self.embedding_num,
             embedding_dim=self.embedding_dim,
             ngf=self.ngf,
+            norm_layer=norm_layer,
             use_dropout=self.use_dropout,
             num_downs=num_downs,
             self_attention=self.self_attention
-        )
+        ).to(self.device)
+
         self.netD = Discriminator(
             input_nc=2 * self.input_nc,
             embedding_num=self.embedding_num,
             ndf=self.ndf,
+            norm_layer=norm_layer,
             image_size=self.image_size,
             use_spectral_norm=self.d_spectral_norm
-        )
+        ).to(self.device)
 
         init_net(self.netG, gpu_ids=self.gpu_ids)
         init_net(self.netD, gpu_ids=self.gpu_ids)
@@ -104,7 +114,7 @@ class Zi2ZiModel:
         self.fake_binary_loss = BinaryLoss(False)
         self.fake_binary_loss = BinaryLoss(False)
         self.l1_loss = nn.L1Loss()
-        self.perceptual_loss = PerceptualLoss()
+
         self.mse = nn.MSELoss()
         self.sigmoid = nn.Sigmoid()
 
@@ -114,7 +124,7 @@ class Zi2ZiModel:
             self.fake_binary_loss.cuda()
             self.fake_binary_loss.cuda()
             self.l1_loss.cuda()
-            self.perceptual_loss.cuda()
+
             self.mse.cuda()
             self.sigmoid.cuda()
 
@@ -152,13 +162,7 @@ class Zi2ZiModel:
         ##############################################
         self.loss_const = self.l1_loss(fake_B_emb, real_B_emb)
         
-        ##############################################
-        # 3) Perceptual loss
-        ##############################################
-        if self.Lperceptual_penalty > 0:
-            self.loss_perceptual = self.perceptual_loss(fake_B, real_B)
-        else:
-            self.loss_perceptual = torch.tensor(0.0).to(self.device)
+
 
         # Store for access
         self.fake_B = fake_B
@@ -219,7 +223,7 @@ class Zi2ZiModel:
             self.loss_G_GAN +
             self.loss_l1 * self.L1_penalty +
             self.loss_const * self.Lconst_penalty +
-            self.loss_perceptual * self.Lperceptual_penalty + 
+
             fake_category_loss_G
         )
         
@@ -227,7 +231,7 @@ class Zi2ZiModel:
         self.optimizer_G.step()
 
         # Return losses for logging
-        return self.loss_const, self.loss_l1, self.category_loss_D, self.loss_G_GAN, self.loss_perceptual
+        return self.loss_const, self.loss_l1, self.category_loss_D, self.loss_G_GAN
 
     def update_lr(self):
         # There should be only one param_group.
