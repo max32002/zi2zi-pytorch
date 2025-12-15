@@ -149,7 +149,6 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
     parser.add_argument('--resize_canvas', type=int, default=0)
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
-    parser.add_argument('--run_all_label', action='store_true')
     parser.add_argument('--self_attention', action='store_true', help='use self attention in generator')
     parser.add_argument('--skip_exist', action='store_true')
 
