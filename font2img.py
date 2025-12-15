@@ -101,12 +101,10 @@ def draw_font2font_example(char, src_font, dst_font, canvas_size, src_x_offset, 
     example_img = convert_to_gray_binary(example_img, 1, 127)
     return example_img
 
-
 def draw_font2imgs_example(char, src_font, canvas_size, x_offset, y_offset,auto_fit=True):
     src_img = draw_character(char, src_font, canvas_size, x_offset, y_offset, auto_fit=auto_fit)
     example_img = convert_to_gray_binary(src_img, 0, 127)
     return example_img
-
 
 def draw_imgs2imgs_example(src_img, dst_img, canvas_size):
     src_img = src_img.resize((canvas_size, canvas_size), Image.BILINEAR).convert('RGB')
@@ -118,11 +116,7 @@ def draw_imgs2imgs_example(src_img, dst_img, canvas_size):
     example_img = example_img.convert('L')
     return example_img
 
-
 def filter_recurring_hash(charset, font, canvas_size, x_offset, y_offset):
-    """ Some characters are missing in a given font, filter them
-    by checking the recurring hashes
-    """
     _charset = charset.copy()
     np.random.shuffle(_charset)
     sample = _charset[:2000]
@@ -132,7 +126,6 @@ def filter_recurring_hash(charset, font, canvas_size, x_offset, y_offset):
         hash_count[hash(img.tobytes())] += 1
     recurring_hashes = filter(lambda d: d[1] > 2, hash_count.items())
     return [rh[0] for rh in recurring_hashes]
-
 
 def font2font(src, dst, charset, char_size, canvas_size,
              src_x_offset, src_y_offset, dst_x_offset, dst_y_offset,
@@ -188,20 +181,11 @@ def font2imgs(src, charset, char_size, canvas_size, x_offset, y_offset, sample_d
                 print("processed %d chars" % count)
 
 def imgs2imgs(src, dst, canvas_size, sample_dir):
-
-    # -*- You should fill the target imgs' label_map -*-
     label_map = {
         '1号字体': 0,
         '2号字体': 1,
     }
     count = 0
-    # For example
-    # source images are 南~0号字体1，南~0号字体2，京~0号字体，市~0号字体，长~0号字体，江~0号字体，大~0号字体，桥~0号字体
-    # make sure all the source images are same font, or at least, very close fonts.
-    # target images are 南~1号字体，京~1号字体，市~1号字体，长~2号字体
-
-    # -*- You should fill the source/target imgs' regular expressions. -*-
-
     # We only need character in source img.
     source_pattern = re.compile('(.)~0号字体')
     # We need character and label in target img.
@@ -240,7 +224,6 @@ def imgs2imgs(src, dst, canvas_size, sample_dir):
             e.save(os.path.join(sample_dir, "%d_%05d.png" % (label, count)))
             count += 1
 
-
 def font2imge(args):
     auto_fit = True
     if args.disable_auto_fit:
@@ -269,6 +252,8 @@ def font2imge(args):
         if args.charset is None:
             raise ValueError('charset file are required.')
         charset = list(open(args.charset, encoding='utf-8').readline().strip())
+        if args.shuffle:
+            np.random.shuffle(charset)
         font2imgs(args.src_font, charset, args.char_size,
                   args.canvas_size, args.src_x_offset, args.src_y_offset,
                   args.sample_dir, auto_fit=auto_fit,
@@ -278,6 +263,8 @@ def font2imge(args):
         raise ValueError('mode should be font2font, font2imgs or imgs2imgs')
 
 if __name__ == "__main__":
+    random.seed()
+    np.random.seed()
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', type=str, choices=['imgs2imgs', 'font2imgs', 'font2font'], required=True,
                         help='generate mode.\n'
@@ -286,7 +273,6 @@ if __name__ == "__main__":
                              'use --src_font and --dst_font for font2font mode.\n'
                              'No imgs2font mode.'
                         )
-
     parser.add_argument('--canvas_size', type=int, default=256, help='canvas size')
     parser.add_argument('--caption_text', type=str, default="")
     parser.add_argument('--char_size', type=int, default=256, help='character size')
