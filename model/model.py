@@ -260,7 +260,7 @@ class Zi2ZiModel:
             current_lr = p['lr']
             update_lr = current_lr * 0.99
             # minimum learning rate guarantee
-            update_lr = max(update_lr, 0.0002)
+            update_lr = max(update_lr, 0.0001)
             p['lr'] = update_lr
             print("Decay net_D learning rate from %.6f to %.6f." % (current_lr, update_lr))
 
