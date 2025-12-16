@@ -32,8 +32,9 @@ def get_unicode_codepoint(char):
 class Zi2ZiModel:
     def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128,
                  ngf=64, ndf=64,
+                 lambda_adv=0.25,
                  Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
-                 schedule=10, lr=0.001, gpu_ids=None, save_dir='.', is_training=True,
+                 schedule=10, lr=0.001, lr_D=None, gpu_ids=None, save_dir='.', is_training=True,
                  image_size=256, self_attention=False, d_spectral_norm=False, norm_type="instance"):
 
         self.gpu_ids = gpu_ids
@@ -49,10 +50,8 @@ class Zi2ZiModel:
         self.Lconst_penalty = Lconst_penalty
         self.Lcategory_penalty = Lcategory_penalty
         self.L1_penalty = L1_penalty
-
-
+        self.lambda_adv = lambda_adv
         self.schedule = schedule
-
         self.save_dir = save_dir
         self.gpu_ids = gpu_ids
 
@@ -62,6 +61,7 @@ class Zi2ZiModel:
         self.ngf = ngf
         self.ndf = ndf
         self.lr = lr
+        self.lr_D = lr_D if lr_D is not None else lr
         self.is_training = is_training
         self.image_size = image_size
         self.self_attention = self_attention
@@ -107,7 +107,7 @@ class Zi2ZiModel:
         init_net(self.netD, gpu_ids=self.gpu_ids)
 
         self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=self.lr, betas=(0.5, 0.999))
-        self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=self.lr, betas=(0.5, 0.999))
+        self.optimizer_D = torch.optim.Adam(self.netD.parameters(), lr=self.lr_D, betas=(0.5, 0.999))
 
         self.category_loss = CategoryLoss(self.embedding_num)
         self.real_binary_loss = BinaryLoss(True)
@@ -152,17 +152,11 @@ class Zi2ZiModel:
         # 取得 real_B 的 embedding
         _, real_B_emb = self.netG(real_B, labels, return_feat=True)
 
-        ##############################################
         # 1) Reconstruction loss
-        ##############################################
         self.loss_l1 = self.l1_loss(fake_B, real_B)
 
-        ##############################################
         # 2) Feature Constancy loss（使用 embedding，不再第二次 forward）
-        ##############################################
         self.loss_const = self.l1_loss(fake_B_emb, real_B_emb)
-        
-
 
         # Store for access
         self.fake_B = fake_B
@@ -176,6 +170,26 @@ class Zi2ZiModel:
             "fake_B_emb": fake_B_emb,
             "real_B_emb": real_B_emb
         }
+
+    def update_lambda_adv(self):
+        """
+        Dynamically adjust lambda_adv based on discriminator loss.
+        Designed for zi2zi-style font GAN where D can easily overpower G.
+        """
+        if not hasattr(self, "lambda_adv"):
+            return
+
+        d = float(self.d_loss.item())
+
+        # --- heuristic schedule ---
+        if d < 0.02:
+            self.lambda_adv = 0.20
+        elif d < 0.08:
+            self.lambda_adv = 0.35
+        elif d < 0.20:
+            self.lambda_adv = 0.50
+        else:
+            self.lambda_adv = 0.60
 
     def optimize_parameters(self):
         # 1. Forward G
@@ -208,6 +222,8 @@ class Zi2ZiModel:
         self.d_loss.backward()
         self.optimizer_D.step()
 
+        self.update_lambda_adv()
+
         # 3. Update G
         self.set_requires_grad(self.netD, False)
         self.optimizer_G.zero_grad(set_to_none=True)
@@ -220,10 +236,9 @@ class Zi2ZiModel:
         fake_category_loss_G = self.category_loss(fake_category_logits, labels) * self.Lcategory_penalty
         
         self.g_loss = (
-            self.loss_G_GAN +
+            self.loss_G_GAN * self.lambda_adv +
             self.loss_l1 * self.L1_penalty +
             self.loss_const * self.Lconst_penalty +
-
             fake_category_loss_G
         )
         
@@ -231,7 +246,13 @@ class Zi2ZiModel:
         self.optimizer_G.step()
 
         # Return losses for logging
-        return self.loss_const, self.loss_l1, self.category_loss_D, self.loss_G_GAN
+        return {
+            "loss_const": self.loss_const.item(),
+            "loss_l1": self.loss_l1.item(),
+            "loss_adv": self.loss_G_GAN.item(),
+            "lambda_adv": self.lambda_adv,
+            "d_loss": self.d_loss.item()
+        }
 
     def update_lr(self):
         # There should be only one param_group.

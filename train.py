@@ -71,7 +71,8 @@ def main():
         self_attention=args.self_attention,
         d_spectral_norm=args.d_spectral_norm,
         norm_type=args.norm_type,
-        lr=args.lr
+        lr=args.lr,
+        lr_D=args.lr_D
     )
     model.setup()
     model.print_networks(True)
@@ -100,15 +101,15 @@ def main():
             labels, image_B, image_A = batch_data
             model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
             model.set_input(model_input_data)
-            const_loss, l1_loss, category_loss, cheat_loss = model.optimize_parameters()
+            losses = model.optimize_parameters()
             global_steps += 1
 
             if batch_id % 100 == 0:
                 passed = time.time() - start_time
                 log_format = "Epoch: [%2d], [%4d/%4d] time: %5d, d_loss: %.4f, g_loss: %.4f, " + \
-                             "category_loss: %.4f, cheat_loss: %.4f, const_loss: %.4f, l1_loss: %.4f"
-                print(log_format % (epoch, batch_id, total_batches, passed, model.d_loss.item(), model.g_loss.item(),
-                                    category_loss.item(), cheat_loss.item(), const_loss.item(), l1_loss.item()))
+                             "adv_loss: %.4f, const_loss: %.4f, l1_loss: %.4f, lambda_adv: %.2f"
+                print(log_format % (epoch, batch_id, total_batches, passed, losses["d_loss"], model.g_loss.item(),
+                                    losses["loss_adv"], losses["loss_const"], losses["loss_l1"], losses["lambda_adv"]))
             
             # --- Checkpointing ---
             if global_steps % args.checkpoint_steps == 0:
@@ -166,6 +167,7 @@ if __name__ == '__main__':
     parser.add_argument('--Lconst_penalty', type=int, default=5, help='weight for const loss')
 
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
+    parser.add_argument('--lr_D', type=float, default=None, help='initial learning rate for discriminator (default: same as lr)')
     parser.add_argument('--random_seed', type=int, default=777, help='random seed for random and pytorch')
     parser.add_argument('--resume', type=int, default=None, help='resume from previous training')
     parser.add_argument('--sample_steps', type=int, default=10, help='number of batches in between two samples are drawn from validation set')
