@@ -71,6 +71,7 @@ def main():
         self_attention=args.self_attention,
         d_spectral_norm=args.d_spectral_norm,
         norm_type=args.norm_type,
+        accum_steps=args.accum_steps,
         lr=args.lr,
         lr_D=args.lr_D
     )
@@ -78,13 +79,12 @@ def main():
     model.print_networks(True)
 
     start_epoch = 0
-    global_steps = 0    
+    global_steps = 0
     if args.resume:
         print(f"Resumed model from step/epoch: {args.resume}")
         model_loaded = model.load_networks(args.resume)
         if not model_loaded:
             return
-
 
     train_dataset = DatasetFromObj(os.path.join(data_dir, 'train.obj'), input_nc=args.input_nc)
     dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
@@ -110,14 +110,14 @@ def main():
                              "adv_loss: %.4f, const_loss: %.4f, l1_loss: %.4f, lambda_adv: %.2f"
                 print(log_format % (epoch, batch_id, total_batches, passed, losses["d_loss"], model.g_loss.item(),
                                     losses["loss_adv"], losses["loss_const"], losses["loss_l1"], losses["lambda_adv"]))
-            
+
             # --- Checkpointing ---
             if global_steps % args.checkpoint_steps == 0:
                 if global_steps >= args.checkpoint_steps_after:
                     # You must save the data before deleting it; the worst-case scenario is that all data will be lost.
                     model.save_networks(global_steps)
                     # --- Clean up old checkpoints (Optional: only keep last) ---
-                    if args.checkpoint_only_last:                 
+                    if args.checkpoint_only_last:
                         # --- Clean up old checkpoints ---
                         for index_step in range(args.checkpoint_steps, global_steps, args.checkpoint_steps):
                             for net_type in ["G", "D"]:
@@ -135,7 +135,7 @@ def main():
         print(f"--- End of Epoch {epoch} --- Time: {epoch_time:.0f}s ---")
 
         model.update_lr()
-    
+
     # --- End of Training ---
     print("\n--- Training Finished ---")
     # Save the final model state
@@ -176,5 +176,6 @@ if __name__ == '__main__':
     parser.add_argument('--ndf', type=int, default=64, help='discriminator filters in first conv layer')
     parser.add_argument('--d_spectral_norm', action='store_true', help='use spectral normalization in discriminator')
     parser.add_argument('--norm_type', type=str, default="instance", help='normalization type: instance or batch')
+    parser.add_argument('--accum_steps', type=int, default=1, help='梯度累積次數 (accumulate gradients for this many small batches)')
 
     main()

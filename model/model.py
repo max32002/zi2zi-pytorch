@@ -33,6 +33,7 @@ class Zi2ZiModel:
     def __init__(self, input_nc=1, embedding_num=40, embedding_dim=128,
                  ngf=64, ndf=64,
                  lambda_adv=0.25,
+                 accum_steps=1,
                  Lconst_penalty=15, Lcategory_penalty=1, L1_penalty=100,
                  schedule=10, lr=0.001, lr_D=None, gpu_ids=None, save_dir='.', is_training=True,
                  image_size=256, self_attention=False, d_spectral_norm=False, norm_type="instance"):
@@ -67,6 +68,8 @@ class Zi2ZiModel:
         self.self_attention = self_attention
         self.d_spectral_norm = d_spectral_norm
         self.norm_type = norm_type
+        self.accum_steps = max(1, accum_steps)
+        self._accum_counter = 0
 
         self.setup()
 
@@ -194,7 +197,7 @@ class Zi2ZiModel:
     def optimize_parameters(self):
         # 1. Forward G
         self.forward(self.model_input_data)
-        
+
         real_A = self.real_A
         real_B = self.real_B
         fake_B = self.fake_B
@@ -203,47 +206,57 @@ class Zi2ZiModel:
         fake_AB = torch.cat([real_A, fake_B], 1)
         real_AB = torch.cat([real_A, real_B], 1)
 
-        # 2. Update D
-        self.set_requires_grad(self.netD, True)
+        # 2. Update D (gradient accumulation)
+        if self._accum_counter == 0:
+            self.set_requires_grad(self.netD, True)
         self.optimizer_D.zero_grad(set_to_none=True)
-        
+
         # Forward D with detached fake
         pred_fake_d, fake_category_logits_d = self.netD(fake_AB.detach())
         pred_real, real_category_logits = self.netD(real_AB)
-        
+
         loss_D_real = self.real_binary_loss(pred_real)
         loss_D_fake = self.fake_binary_loss(pred_fake_d)
-        
+
         real_category_loss = self.category_loss(real_category_logits, labels)
         fake_category_loss_d = self.category_loss(fake_category_logits_d, labels)
         self.category_loss_D = (real_category_loss + fake_category_loss_d) * self.Lcategory_penalty
-        
-        self.d_loss = (loss_D_real + loss_D_fake) * 0.5 + self.category_loss_D * 0.5
+
+        self.d_loss = ((loss_D_real + loss_D_fake) * 0.5 + self.category_loss_D * 0.5) / self.accum_steps
         self.d_loss.backward()
-        self.optimizer_D.step()
 
         self.update_lambda_adv()
 
         # 3. Update G
         self.set_requires_grad(self.netD, False)
-        self.optimizer_G.zero_grad(set_to_none=True)
-        
+        if self._accum_counter == 0:
+            self.optimizer_G.zero_grad(set_to_none=True)
+
         # Forward D again with attached fake (using updated weights is standard, or use retained graph?)
         # Standard GAN training uses updated D for G loss.
         pred_fake, fake_category_logits = self.netD(fake_AB)
-        
+
         self.loss_G_GAN = self.real_binary_loss(pred_fake)
         fake_category_loss_G = self.category_loss(fake_category_logits, labels) * self.Lcategory_penalty
-        
+
         self.g_loss = (
             self.loss_G_GAN * self.lambda_adv +
             self.loss_l1 * self.L1_penalty +
             self.loss_const * self.Lconst_penalty +
             fake_category_loss_G
         )
-        
+
+        self.g_loss = self.g_loss / self.accum_steps
         self.g_loss.backward()
-        self.optimizer_G.step()
+
+        self._accum_counter += 1
+        if self._accum_counter >= self.accum_steps:
+            print("match lost update.")
+            self.optimizer_D.step()
+            self.optimizer_G.step()
+            self.optimizer_D.zero_grad(set_to_none=True)
+            self.optimizer_G.zero_grad(set_to_none=True)
+            self._accum_counter = 0
 
         # Return losses for logging
         return {
@@ -260,7 +273,7 @@ class Zi2ZiModel:
             current_lr = p['lr']
             update_lr = current_lr * 0.99
             # minimum learning rate guarantee
-            update_lr = max(update_lr, 0.0001)
+            update_lr = max(update_lr, 0.00006)
             p['lr'] = update_lr
             print("Decay net_D learning rate from %.6f to %.6f." % (current_lr, update_lr))
 
@@ -476,7 +489,7 @@ class Zi2ZiModel:
             output_images = torch.cat([self.fake_B, self.real_B], 3)
             for i, (label, image_tensor) in enumerate(zip(batch_data[0], output_images)):
                 label_dir = os.path.join(basename, str(label.item()))
-                os.makedirs(label_dir, exist_ok=True)  
+                os.makedirs(label_dir, exist_ok=True)
 
                 if filename_rule == "seq":
                     filename = str(i)
@@ -488,7 +501,7 @@ class Zi2ZiModel:
                     elif filename_rule == "unicode_int":
                         filename = str(get_unicode_codepoint(src_char_list[i]))
                 else:
-                    filename = str(i)  
+                    filename = str(i)
 
                 opencv_image = cv2.cvtColor(self.save_image(image_tensor), cv2.COLOR_BGR2GRAY)
                 processed_image = self.process_image(opencv_image, crop_src_font, canvas_size, resize_canvas,
