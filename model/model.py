@@ -251,7 +251,6 @@ class Zi2ZiModel:
 
         self._accum_counter += 1
         if self._accum_counter >= self.accum_steps:
-            print("match lost update.")
             self.optimizer_D.step()
             self.optimizer_G.step()
             self.optimizer_D.zero_grad(set_to_none=True)
@@ -273,7 +272,7 @@ class Zi2ZiModel:
             current_lr = p['lr']
             update_lr = current_lr * 0.99
             # minimum learning rate guarantee
-            update_lr = max(update_lr, 0.00006)
+            update_lr = max(update_lr, 0.00005)
             p['lr'] = update_lr
             print("Decay net_D learning rate from %.6f to %.6f." % (current_lr, update_lr))
 
@@ -281,7 +280,7 @@ class Zi2ZiModel:
             current_lr = p['lr']
             update_lr = current_lr * 0.99
             # minimum learning rate guarantee
-            update_lr = max(update_lr, 0.0002)
+            update_lr = max(update_lr, 0.00015)
             p['lr'] = update_lr
             print("Decay net_G learning rate from %.6f to %.6f." % (current_lr, update_lr))
 
