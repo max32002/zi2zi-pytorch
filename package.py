@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import argparse
 import glob
 import json
@@ -8,7 +7,6 @@ import random
 import re
 
 from tqdm import tqdm
-
 
 def pickle_examples_with_split_ratio(paths, train_path, val_path, train_val_split=0.1):
     """
@@ -28,7 +26,6 @@ def pickle_examples_with_split_ratio(paths, train_path, val_path, train_val_spli
                     else:
                         pickle.dump(example, ft)
 
-
 def pickle_examples_with_file_name(paths, obj_path):
     with open(obj_path, 'wb') as fa:
         for p, label in tqdm(paths):
@@ -38,36 +35,15 @@ def pickle_examples_with_file_name(paths, obj_path):
                 example = (label, img_bytes)
                 pickle.dump(example, fa)
 
-
-parser = argparse.ArgumentParser(description='Compile list of images into a pickled object for training')
-parser.add_argument('--dir', required=True, help='path of examples')
-parser.add_argument('--save_dir', required=True, help='path to save pickled files')
-parser.add_argument('--split_ratio', type=float, default=0.1, dest='split_ratio',
-                    help='split ratio between train and val')
-
-parser.add_argument('--dst_json', type=str, default=None)
-parser.add_argument('--type_file', type=str, default='type/宋黑类字符集.txt')
-
-parser.add_argument('--save_obj_dir', type=str, default=None)
-
-args = parser.parse_args()
-
-
 def get_special_type():
-
     with open(args.type_file, 'r', encoding='utf-8') as fp:
         font_list = [line.strip() for line in fp]
-    '''
-    font_list = os.listdir(args.type_dir)
-    font_list = [f[:f.find('.test.jpg')] for f in font_list]
-    '''
     font_set = set(font_list)
     font_dict = {v: k for v, k in enumerate(font_list)}
     inv_font_dict = {k: v for v, k in font_dict.items()}
     return font_set, font_dict, inv_font_dict
 
-
-if __name__ == "__main__":
+def package(args):
     if not os.path.isdir(args.save_dir):
         os.mkdir(args.save_dir)
 
@@ -100,11 +76,15 @@ if __name__ == "__main__":
         glob.glob(os.path.join(args.dir, "*.png")) +
         glob.glob(os.path.join(args.dir, "*.tif"))
     )
-    # '%d_%05d.png'
+    
+
     cur_file_list = []
     for file_name in tqdm(total_file_list):
-        label = os.path.basename(file_name).split('_')[0]
-        label = int(label)
+        label = 0
+        if not args.no_label:
+            if '_' in file_name:
+                label = os.path.basename(file_name).split('_')[0]
+                label = int(label)
         if ok_fonts is None:
             cur_file_list.append((file_name, label))
         else:
@@ -120,3 +100,17 @@ if __name__ == "__main__":
             val_path=val_path,
             train_val_split=args.split_ratio
         )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Compile list of images into a pickled object for training')
+    parser.add_argument('--dir', required=True, help='path of examples')
+    parser.add_argument('--save_dir', required=True, help='path to save pickled files')
+    parser.add_argument('--split_ratio', type=float, default=0.1, dest='split_ratio', help='split ratio between train and val')
+    parser.add_argument('--dst_json', type=str, default=None)
+    parser.add_argument('--type_file', type=str, default='type/宋黑类字符集.txt')
+    parser.add_argument('--save_obj_dir', type=str, default=None)
+    parser.add_argument('--no_label', action='store_true', help='only label=0')
+
+    args = parser.parse_args()
+    package(args)
