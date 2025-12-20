@@ -20,20 +20,11 @@ def ensure_dir(path):
     """確保目錄存在，不存在則建立"""
     os.makedirs(path, exist_ok=True)
 
-def convert_to_gray_binary(image, ksize=1, threshold=127):
-    """將 PIL 圖像轉換為灰階二值 OpenCV 圖像"""
-    opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-    blurred_image = cv2.GaussianBlur(opencv_image, (ksize, ksize), 0) if ksize > 0 else opencv_image
-    _, binary_image = cv2.threshold(blurred_image, threshold, 255, cv2.THRESH_BINARY)
-    return cv2.cvtColor(binary_image, cv2.COLOR_BGR2GRAY)
-
-def draw_single_char(char, font, canvas_size, x_offset=0, y_offset=0):
-    """繪製單個字元並返回灰階二值圖像"""
-    image = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
-    draw = ImageDraw.Draw(image)
-    draw.text((x_offset, y_offset), char, (0, 0, 0), font=font)
-    gray_image = image.convert('L')
-    return convert_to_gray_binary(gray_image)
+def render_char(char, font, canvas_size, x_offset=0, y_offset=0):
+    img = Image.new("L", (canvas_size, canvas_size), 255)
+    draw = ImageDraw.Draw(img)
+    draw.text((x_offset, y_offset), char,  fill=0, font=font )
+    return img
 
 def load_char_list(filepath):
     """從檔案載入字元列表"""
@@ -56,8 +47,9 @@ def create_dataloader(char_list, label, canvas_size, font, x_offset, y_offset, s
         if ord(char) in ignore_int_array:
             continue
         valid_chars.append(char)
-        image = draw_single_char(char, font, canvas_size, x_offset, y_offset)
-        image_tensors.append(transforms.Normalize(0.5, 0.5)(transforms.ToTensor()(image)).unsqueeze(dim=0))
+        image_binary = render_char(char, font, canvas_size, x_offset, y_offset)
+        image_binary = image_binary.convert("1", dither=Image.NONE)
+        image_tensors.append(transforms.Normalize(0.5, 0.5)(transforms.ToTensor()(image_binary)).unsqueeze(dim=0))
         label_list.append(label)
 
     if not image_tensors:

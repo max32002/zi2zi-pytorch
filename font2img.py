@@ -19,6 +19,12 @@ from tqdm import tqdm
 from utils.charset_util import processGlyphNames
 
 
+def render_char(char, font, canvas_size, x_offset=0, y_offset=0):
+    img = Image.new("L", (canvas_size, canvas_size), 255)
+    draw = ImageDraw.Draw(img)
+    draw.text((x_offset, y_offset), char,  fill=0, font=font )
+    return img
+
 def draw_character(char, font, canvas_size, x_offset=0, y_offset=0, auto_fit=True):
     """渲染單個字元到圖像。"""
     img = None
@@ -65,10 +71,7 @@ def draw_character(char, font, canvas_size, x_offset=0, y_offset=0, auto_fit=Tru
         img = transforms.ToPILImage()(img)
         img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
     else:
-        img = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
-        draw = ImageDraw.Draw(img)
-        draw.text((0 + x_offset, 0 + y_offset), char, (0, 0, 0), font=font)
-        img = img.convert('L')
+        img = render_char(char, font, canvas_size, x_offset, y_offset)
     return img
 
 def convert_to_gray_binary(example_img, ksize=1, threshold=127):

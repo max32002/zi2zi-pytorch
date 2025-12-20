@@ -3,10 +3,16 @@ import logging
 import os
 import shutil
 
-import cv2  # OpenCV
-import freetype  # For TTF font handling
+import cv2
 import numpy as np
+import freetype
 from PIL import Image, ImageDraw, ImageFont
+
+import inspect
+
+print("cv2 file:", cv2.__file__)
+print("has freetype:", hasattr(cv2, "freetype"))
+
 
 # 設定日誌記錄
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -25,36 +31,77 @@ def load_font(font_path, font_size):
         return None
     return font
 
-def generate_filename(char, filename_rule, seq_num):
+def generate_filename(char, filename_rule, file_format, seq_num):
     """根據規則生成檔案名稱。(與先前版本相同)"""
     if filename_rule == 'seq':
-        return f'{seq_num:04d}.png'
+        return f'{seq_num:04d}.{file_format}'
     elif filename_rule == 'char':
         # 對於可能包含不適合做檔名的字元進行處理 (例如 / \ : * ? " < > |)
         safe_char = "".join(c for c in char if c.isalnum() or c in (' ', '.', '_')).rstrip()
         if not safe_char: # 如果字元本身就是特殊符號，給個替代名稱
              safe_char = f'char_{seq_num:04d}'
-        return f'{safe_char}.png'
+        return f'{safe_char}.{file_format}'
     elif filename_rule == 'unicode_int':
-        return f'{ord(char)}.png'
+        return f'{ord(char)}.{file_format}'
     elif filename_rule == 'unicode_hex':
-        return f'{ord(char):x}.png'
+        return f'{ord(char):x}.{file_format}'
     else:
-        return f'{seq_num:04d}.png' # 預設
+        return f'{seq_num:04d}.{file_format}' # 預設
 
-def draw_character(char, font, canvas_size, x_offset, y_offset, background_color = 'white'):
-    """繪製單個字元圖像。"""
-    image = Image.new('RGB', (canvas_size, canvas_size), background_color)
-    draw = ImageDraw.Draw(image)
-    draw.text((0 + x_offset, 0 + y_offset), char, (0, 0, 0), font=font)
+def render_char(char, font, canvas_size, x_offset=0, y_offset=0):
+    img = Image.new("L", (canvas_size, canvas_size), 255)
+    draw = ImageDraw.Draw(img)
+    draw.text((x_offset, y_offset), char,  fill=0, font=font )
+    return img
 
-    bbox = image.getbbox()
-    if bbox is None:
-        print(f"警告：字型 '{font.path}' 中缺少字元 '{char}' 的 glyph。")
-        return None  # 直接返回 None，不儲存圖像
+def draw_character(char, font, canvas_size, x_offset=0, y_offset=0, auto_fit=True):
+    """渲染單個字元到圖像。"""
+    img = None
+    if auto_fit:
+        img = Image.new("L", (canvas_size * 2, canvas_size * 2), 0)
+        draw = ImageDraw.Draw(img)
+        draw.text((x_offset, y_offset), char, 255, font=font)
+
+        bbox = img.getbbox()
+        if bbox is None:
+            print(f"警告：字型 '{font.path}' 中缺少字元 '{char}' 的 glyph。")
+            return None
+        l, u, r, d = bbox
+        l = max(0, l - 5)
+        u = max(0, u - 5)
+        r = min(canvas_size * 2 - 1, r + 5)
+        d = min(canvas_size * 2 - 1, d + 5)
+        if l >= r or u >= d:
+            print(f"警告：字型 '{font.path}' 中缺少字元 '{char}' 的 glyph。")
+            return None
+        img = np.array(img)
+        img = img[u:d, l:r]
+        img = 255 - img
+        img = Image.fromarray(img)
+        # img.show()
+        width, height = img.size
+        # Convert PIL.Image to FloatTensor, scale from 0 to 1, 0 = black, 1 = white
+        try:
+            img = transforms.ToTensor()(img)
+        except Exception as e:
+            print(f"Error ToTensor: {e}")
+            return None
+        img = img.unsqueeze(0)  # 加轴
+        pad_len = int(abs(width - height) / 2)  # 预填充区域的大小
+        # 需要填充区域，如果宽大于高则上下填充，否则左右填充
+        if width > height:
+            fill_area = (0, 0, pad_len, pad_len)
+        else:
+            fill_area = (pad_len, pad_len, 0, 0)
+        # 填充像素常值
+        fill_value = 1
+        img = nn.ConstantPad2d(fill_area, fill_value)(img)
+        img = img.squeeze(0)
+        img = transforms.ToPILImage()(img)
+        img = img.resize((canvas_size, canvas_size), Image.BILINEAR)
     else:
-        #print(f"輸出：字元 '{char}' 的 glyph。")
-        return image
+        img = render_char(char, font, canvas_size, x_offset, y_offset)
+    return img
 
 def is_image_blank(image):
     """檢查圖像是否完全空白。"""
@@ -67,7 +114,7 @@ def is_image_blank(image):
     else:
         return False
 
-def generate_glyph_images(keyword, font_path, font_size, canvas_size, output_dir, filename_rule, file_path=None, x_offset=0, y_offset=0, clear_output_dir=False, disable_binary=False):
+def generate_glyph_images(keyword, font_path, font_size, canvas_size, output_dir, filename_rule, file_format="png", file_path=None, x_offset=0, y_offset=0, clear_output_dir=False, threshold_value=128, auto_fit=True, disable_binary=False):
     """使用指定參數生成字元圖像。"""
     font = load_font(font_path, font_size)
     if font is None:
@@ -117,17 +164,19 @@ def generate_glyph_images(keyword, font_path, font_size, canvas_size, output_dir
     saved_count = 0
     skipped_count = 0
     for i, char in enumerate(unique_characters):
-        filename = generate_filename(char, filename_rule, i)
+        filename = generate_filename(char, filename_rule, file_format, i)
         output_path = os.path.join(output_dir, filename)
 
-        image_rgb = draw_character(char, font, canvas_size, x_offset, y_offset, background_color='white')
+        # PIL
+        image_bgr = draw_character(char, font, canvas_size, x_offset, y_offset, auto_fit=auto_fit)
 
-        if image_rgb and not is_image_blank(image_rgb):
+        if image_bgr and not is_image_blank(image_bgr):
             try:
-                image_binary = image_rgb
+                image_binary = image_bgr
                 # 進行二極化轉換
+                # TODO: 判斷 threshold_value
                 if not disable_binary:
-                    image_binary = image_rgb.convert('1')
+                    image_binary = image_binary.convert("1", dither=Image.NONE)
 
                 # 儲存二極化後的圖像
                 image_binary.save(output_path)
@@ -146,7 +195,6 @@ def generate_glyph_images(keyword, font_path, font_size, canvas_size, output_dir
 
     print(f"圖像生成完成。成功儲存 {saved_count} 個圖像，跳過 {skipped_count} 個圖像。")
 
-
 def load_font_freetype(font_path):
     """載入字型檔案 using freetype-py."""
     face = None
@@ -161,104 +209,29 @@ def load_font_freetype(font_path):
         return None
     return face
 
-def draw_character_cv(char, face, font_size, canvas_size, x_offset, y_offset, background_color_bgr=(255, 255, 255)):
-    """
-    使用 FreeType 和 OpenCV 繪製單個字元圖像 (BGR)。
-    字元將根據其在字型中的度量標準進行定位。
-    (x_offset, y_offset) 用於調整字元原點 (基準線上的點) 相對於畫布上的參考點的位置。
-    """
+def draw_character_cv(char, face, font_size, canvas_size, x_offset, y_offset):
     if not face:
         logging.error("錯誤: 無效的 FreeType face 物件。")
         return None
 
-    try:
-        # 設定字型大小 (需要在讀取 face.size metrics 之前設定)
         face.set_pixel_sizes(0, font_size)
+        face.load_char(char, freetype.FT_LOAD_RENDER)
 
-        # 載入字元 glyph 並渲染成灰度 bitmap
-        # 使用 FT_LOAD_TARGET_NORMAL for anti-aliased grayscale
-        face.load_char(char, freetype.FT_LOAD_RENDER | freetype.FT_LOAD_TARGET_NORMAL)
+        glyph = face.glyph
+        bitmap = glyph.bitmap
 
-        # 獲取渲染後的 bitmap 資料
-        bitmap = face.glyph.bitmap
-        glyph_rows = bitmap.rows
-        glyph_width = bitmap.width
-        glyph_buffer = bitmap.buffer
+        canvas = np.full((canvas_size, canvas_size), 255, dtype=np.uint8)
 
-        # 如果 glyph 為空 (例如空格或字型不支援)
-        if glyph_rows == 0 or glyph_width == 0:
-             # logging.info(f"字元 '{char}' 的 glyph 為空，返回空白畫布。")
-             return np.full((canvas_size, canvas_size, 3), background_color_bgr, dtype=np.uint8)
+        top = y_offset + face.size.ascender // 64 - glyph.bitmap_top
+        left = x_offset + glyph.bitmap_left
 
-        # 將 buffer 轉換為 NumPy array (灰度圖像)
-        glyph_gray = np.array(glyph_buffer, dtype=np.uint8).reshape(glyph_rows, glyph_width)
+        h, w = bitmap.rows, bitmap.width
+        buffer = np.array(bitmap.buffer, dtype=np.uint8).reshape(h, w)
 
-        # --- 計算字元定位 ---
-        # 1. 定義畫布上的參考基準線 Y 座標 (例如，設為 font_size 或接近頂部)
-        #    使用 font_size 作為 y=0 時的基準線，更容易預測。
-        baseline_ref_y = font_size # 當 y_offset=0 時，基準線在 y=font_size 處
-
-        # 2. 計算目標 "畫筆位置" (字元原點) 在畫布上的座標
-        pen_x = x_offset
-        pen_y = baseline_ref_y + y_offset # 應用 y_offset 調整基準線
-
-        # 3. 獲取字元相對於原點的度量標準
-        bitmap_left = face.glyph.bitmap_left # 從原點到 bitmap 左邊緣的水平距離
-        bitmap_top = face.glyph.bitmap_top   # 從原點(基準線)到 bitmap 頂部的垂直距離 (FreeType中通常向上為正)
-
-        # 4. 計算 bitmap 左上角在畫布上的實際貼上座標 (paste_x, paste_y)
-        paste_x = pen_x + bitmap_left
-        # 因為畫布 Y 軸向下為正，而 bitmap_top 向上為正，所以用減法
-        paste_y = pen_y - bitmap_top
-
-        # --- 創建畫布並貼上 glyph ---
-        # 創建 BGR 白色畫布
-        canvas = np.full((canvas_size, canvas_size, 3), background_color_bgr, dtype=np.uint8)
-
-        # --- (邊界裁剪邏輯 - 與之前版本相同) ---
-        # 確定實際能貼上的區域 (避免超出邊界)
-        x_start_canvas = max(paste_x, 0)
-        y_start_canvas = max(paste_y, 0)
-        x_end_canvas = min(paste_x + glyph_width, canvas_size)
-        y_end_canvas = min(paste_y + glyph_rows, canvas_size)
-
-        glyph_x_start = max(0, -paste_x)
-        glyph_y_start = max(0, -paste_y)
-        glyph_width_to_paste = x_end_canvas - x_start_canvas
-        glyph_height_to_paste = y_end_canvas - y_start_canvas
-        glyph_x_end = glyph_x_start + glyph_width_to_paste
-        glyph_y_end = glyph_y_start + glyph_height_to_paste
-
-        if glyph_width_to_paste <= 0 or glyph_height_to_paste <= 0:
-             # logging.info(f"字元 '{char}' 計算出的貼上位置完全超出畫布範圍。")
-             return canvas
-
-        roi = canvas[y_start_canvas:y_end_canvas, x_start_canvas:x_end_canvas]
-        glyph_part = glyph_gray[glyph_y_start:glyph_y_end, glyph_x_start:glyph_x_end]
-
-        if roi.shape[:2] != glyph_part.shape[:2]:
-             logging.warning(f"字元 '{char}' 的 ROI ({roi.shape[:2]}) 與 glyph part ({glyph_part.shape[:2]}) 尺寸不匹配。跳過貼上。")
-             return canvas
-        # --- (邊界裁剪邏輯結束) ---
-
-
-        # --- (貼上邏輯 - 與之前版本相同) ---
-        # 創建遮罩並貼上黑色字元
-        mask = cv2.cvtColor(glyph_part, cv2.COLOR_GRAY2BGR)
-        boolean_mask = mask[:,:,0] > 0 # Use grayscale value for mask
-
-        char_black_bgr = np.zeros_like(roi)
-        np.copyto(roi, char_black_bgr, where=boolean_mask[:,:,np.newaxis])
-        # --- (貼上邏輯結束) ---
+        if h > 0 and w > 0:
+            canvas[top:top+h, left:left+w] = 255 - buffer        
 
         return canvas
-
-    except freetype.freetype.FT_Exception as e:
-        logging.error(f"處理字元 '{char}' 時 FreeType 發生錯誤: {e}")
-        return np.full((canvas_size, canvas_size, 3), background_color_bgr, dtype=np.uint8)
-    except Exception as e:
-        logging.error(f"處理字元 '{char}' 時發生未知錯誤: {e}")
-        return np.full((canvas_size, canvas_size, 3), background_color_bgr, dtype=np.uint8)
 
 def is_image_blank_cv(image_bgr, background_color_bgr=(255, 255, 255)):
     """檢查 OpenCV BGR 圖像是否完全為指定的背景色。"""
@@ -267,7 +240,7 @@ def is_image_blank_cv(image_bgr, background_color_bgr=(255, 255, 255)):
     # 檢查是否所有像素都等於背景色
     return np.all(image_bgr == background_color_bgr)
 
-def generate_glyph_images_cv(keyword, font_path, font_size, canvas_size, output_dir, filename_rule, file_path=None, x_offset=0, y_offset=0, clear_output_dir=False, threshold_value=128, disable_binary=False):
+def generate_glyph_images_cv(keyword, font_path, font_size, canvas_size, output_dir, filename_rule, file_format, file_path=None, x_offset=0, y_offset=0, clear_output_dir=False, threshold_value=128, disable_binary=False):
     """使用 OpenCV 和 FreeType 生成字元圖像，並進行二極化處理後儲存。"""
     face = load_font_freetype(font_path)
     if face is None:
@@ -324,11 +297,11 @@ def generate_glyph_images_cv(keyword, font_path, font_size, canvas_size, output_
     background_bgr = (255, 255, 255) # OpenCV White background (BGR)
 
     for i, char in enumerate(unique_characters):
-        filename = generate_filename(char, filename_rule, i)
+        filename = generate_filename(char, filename_rule, file_format, i)
         output_path = os.path.join(output_dir, filename)
 
         # 創建 BGR 圖像 (包含文字)
-        image_bgr = draw_character_cv(char, face, font_size, canvas_size, x_offset, y_offset, background_bgr)
+        image_bgr = draw_character_cv(char, face, font_size, canvas_size, x_offset, y_offset)
 
         # 檢查圖像是否有效且非空白
         if image_bgr is not None and not is_image_blank_cv(image_bgr, background_bgr):
@@ -370,18 +343,20 @@ def generate_glyph_images_cv(keyword, font_path, font_size, canvas_size, output_
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='生成字元圖像。')
-    parser.add_argument('--keyword', default="", help='要生成的字串。')
-    parser.add_argument('--font', required=True, help='字型檔案的路徑。')
-    parser.add_argument('--font_size', type=int, default=256, help='字型大小。')
-    parser.add_argument('--canvas_size', type=int, default=256, help='圖布大小 (邊長)。')
-    parser.add_argument('--output_dir', default='glyph_image', help='輸出目錄。')
-    parser.add_argument('--filename_rule', type=str, default="unicode_int", choices=['seq', 'char', 'unicode_int', 'unicode_hex'], help="檔案名稱規則")
-    parser.add_argument('--file', type=str, help='從文字檔案讀取字元。')
-    parser.add_argument("--x_offset", type=int, default=0, help="字型 X 軸偏移量，預設為 0。")
-    parser.add_argument("--y_offset", type=int, default=0, help="字型 Y 軸偏移量，預設為 0。")
     parser.add_argument("--clear", action="store_true", help="清除輸出目錄中的所有檔案。")
     parser.add_argument("--disable_binary", action="store_true", help="停用二極化")
     parser.add_argument("--threshold", type=int, default=128, help="二極化的閾值 (0-255) (預設: 128)。")
+    parser.add_argument("--x_offset", type=int, default=0, help="字型 X 軸偏移量，預設為 0。")
+    parser.add_argument("--y_offset", type=int, default=0, help="字型 Y 軸偏移量，預設為 0。")
+    parser.add_argument("-f", "--format", default="png", help="目標檔案格式 (例如: pbm, png, jpg)")
+    parser.add_argument('--canvas_size', type=int, default=256, help='圖布大小 (邊長)。')
+    parser.add_argument('--disable_auto_fit', action='store_true', help='disable image auto fit')
+    parser.add_argument('--file', type=str, help='從文字檔案讀取字元。')
+    parser.add_argument('--filename_rule', type=str, default="unicode_int", choices=['seq', 'char', 'unicode_int', 'unicode_hex'], help="檔案名稱規則")
+    parser.add_argument('--font', required=True, help='字型檔案的路徑。')
+    parser.add_argument('--font_size', type=int, default=256, help='字型大小。')
+    parser.add_argument('--keyword', default="", help='要生成的字串。')
+    parser.add_argument('--output_dir', default='glyph_image', help='輸出目錄。')
 
     args = parser.parse_args()
 
@@ -391,20 +366,6 @@ if __name__ == '__main__':
 
     # 執行生成函數
     '''
-    generate_glyph_images(
-        keyword=args.keyword,
-        font_path=args.font,
-        font_size=args.font_size,
-        canvas_size=args.canvas_size,
-        output_dir=args.output_dir,
-        filename_rule=args.filename_rule,
-        file_path=args.file,
-        x_offset=args.x_offset,
-        y_offset=args.y_offset,
-        clear_output_dir=args.clear,
-        disable_binary=args.disable_binary
-    )
-    '''
     generate_glyph_images_cv(
         keyword=args.keyword,
         font_path=args.font,
@@ -412,11 +373,34 @@ if __name__ == '__main__':
         canvas_size=args.canvas_size,
         output_dir=args.output_dir,
         filename_rule=args.filename_rule,
+        file_format=args.format,
         file_path=args.file,
         x_offset=args.x_offset,
         y_offset=args.y_offset,
         clear_output_dir=args.clear,
         threshold_value=args.threshold,
+        disable_binary=args.disable_binary
+    )
+    '''
+
+    auto_fit = True
+    if args.disable_auto_fit:
+        auto_fit = False
+
+    generate_glyph_images(
+        keyword=args.keyword,
+        font_path=args.font, 
+        font_size=args.font_size,
+        canvas_size=args.canvas_size,
+        output_dir=args.output_dir,
+        filename_rule=args.filename_rule,
+        file_format=args.format,
+        file_path=args.file,
+        x_offset=args.x_offset,
+        y_offset=args.y_offset,
+        clear_output_dir=args.clear,
+        threshold_value=args.threshold,
+        auto_fit=auto_fit,
         disable_binary=args.disable_binary
     )
 
