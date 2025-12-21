@@ -21,6 +21,11 @@ def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
 def render_char(char, font, canvas_size, x_offset=0, y_offset=0):
+    mask = font.getmask(char) 
+    if not mask.getbbox(): 
+        #print(f"字體不支援這個字: {char}") 
+        return None
+
     img = Image.new("L", (canvas_size, canvas_size), 255)
     draw = ImageDraw.Draw(img)
     draw.text((x_offset, y_offset), char,  fill=0, font=font )
@@ -46,11 +51,12 @@ def create_dataloader(char_list, label, canvas_size, font, x_offset, y_offset, s
             continue
         if ord(char) in ignore_int_array:
             continue
-        valid_chars.append(char)
         image_binary = render_char(char, font, canvas_size, x_offset, y_offset)
-        image_binary = image_binary.convert("1", dither=Image.NONE)
-        image_tensors.append(transforms.Normalize(0.5, 0.5)(transforms.ToTensor()(image_binary)).unsqueeze(dim=0))
-        label_list.append(label)
+        if image_binary:
+            valid_chars.append(char)
+            image_binary = image_binary.convert("1", dither=Image.NONE)
+            image_tensors.append(transforms.Normalize(0.5, 0.5)(transforms.ToTensor()(image_binary)).unsqueeze(dim=0))
+            label_list.append(label)
 
     if not image_tensors:
         return None, ""
