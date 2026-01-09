@@ -48,8 +48,6 @@ class Zi2ZiModel:
 
         self.Lconst_penalty = Lconst_penalty
         self.Lcategory_penalty = Lcategory_penalty
-        self.Lconst_penalty = Lconst_penalty
-        self.Lcategory_penalty = Lcategory_penalty
         self.L1_penalty = L1_penalty
         self.lambda_adv = lambda_adv
         self.schedule = schedule

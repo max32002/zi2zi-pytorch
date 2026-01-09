@@ -1,5 +1,4 @@
 import argparse
-import logging
 import os
 import shutil
 
@@ -8,14 +7,31 @@ import numpy as np
 import freetype
 from PIL import Image, ImageDraw, ImageFont
 
-import inspect
+import logging
 
-print("cv2 file:", cv2.__file__)
-print("has freetype:", hasattr(cv2, "freetype"))
+class SimpleColorFormatter(logging.Formatter):
+    # 定義顏色碼
+    COLORS = {
+        'INFO': "\x1b[32mINFO\x1b[0m",
+        'WARNING': "\x1b[33mWARNING\x1b[0m",
+        'ERROR': "\x1b[31mERROR\x1b[0m",
+        'DEBUG': "\x1b[36mDEBUG\x1b[0m",
+    }
+
+    def format(self, record):
+        level_name = self.COLORS.get(record.levelname, record.levelname)
+        return f"{level_name}: {record.getMessage()}"
+
+# 套用設定
+handler = logging.StreamHandler()
+handler.setFormatter(SimpleColorFormatter())
+logging.getLogger().addHandler(handler)
+logging.getLogger().setLevel(logging.INFO)
 
 
 # 設定日誌記錄
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+#logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(levelname).1s: %(message)s')
 
 def load_font(font_path, font_size):
     """載入字型檔案。"""
@@ -48,7 +64,12 @@ def generate_filename(char, filename_rule, file_format, seq_num):
     else:
         return f'{seq_num:04d}.{file_format}' # 預設
 
-def render_char(char, font, canvas_size, x_offset=0, y_offset=0):
+def render_char(char, font, canvas_size, x_offset=0, y_offset=0): 
+    mask = font.getmask(char) 
+    if not mask.getbbox(): 
+        #print(f"字體不支援這個字: {char}") 
+        return None
+
     img = Image.new("L", (canvas_size, canvas_size), 255)
     draw = ImageDraw.Draw(img)
     draw.text((x_offset, y_offset), char,  fill=0, font=font )

@@ -164,7 +164,7 @@ if __name__ == '__main__':
     parser.add_argument('--input_nc', type=int, default=1, help='number of input images channels')
     parser.add_argument('--L1_penalty', type=int, default=97, help='weight for L1 loss')
     parser.add_argument('--Lcategory_penalty', type=float, default=1.0, help='weight for category loss')
-    parser.add_argument('--Lconst_penalty', type=int, default=10, help='weight for const loss')
+    parser.add_argument('--Lconst_penalty', type=int, default=15, help='weight for const loss')
 
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate for adam')
     parser.add_argument('--lr_D', type=float, default=None, help='initial learning rate for discriminator (default: same as lr)')
