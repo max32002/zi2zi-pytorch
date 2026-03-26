@@ -153,8 +153,6 @@ class UnetSkipConnectionBlock(nn.Module):
                 deepest_feat = None
                 second_feat = None
             dec = self.up(sub)
-            if self.att is not None:
-                dec = self.att(dec)
             # outermost returns final image and the two feature maps
             return dec, deepest_feat, second_feat
 
@@ -178,8 +176,6 @@ class UnetSkipConnectionBlock(nn.Module):
                 second_feat = enc
 
             dec = self.up(sub)
-            if self.att is not None:
-                dec = self.att(dec)
 
             if self.use_res_skip:
                 combined = x + dec
@@ -200,15 +196,15 @@ class UNetGenerator(nn.Module):
         self.embedder = nn.Embedding(embedding_num, embedding_dim)
         self.use_res_skip = use_res_skip
 
-        # Build innermost with attention (bottleneck)
+        # 1. 瓶頸層（最深處）：關閉 SA，因為 3x3 空間資訊太少
         unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8,
                                              input_nc=None, submodule=None,
                                              innermost=True, embedding_dim=embedding_dim,
                                              norm_layer=norm_layer, use_dropout=use_dropout,
                                              use_pixel_shuffle=use_pixel_shuffle, use_res_skip=use_res_skip,
-                                             self_attention=True, capture_second=False)
+                                             self_attention=False, capture_second=False)
 
-        # add several ngf*8 blocks (no attention)
+        # 2. 中間層：維持SA關閉
         for _ in range(num_downs - 6):
             unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8,
                                                  input_nc=None, submodule=unet_block,
@@ -216,23 +212,24 @@ class UNetGenerator(nn.Module):
                                                  use_pixel_shuffle=use_pixel_shuffle, use_res_skip=use_res_skip,
                                                  self_attention=False, capture_second=False)
 
-        # second-innermost: capture this enc as second_deepest and add attention here
+        # 3. 第二深層（6x6）：建議關閉 SA，但維持 capture_second=True
         unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8,
                                              input_nc=None, submodule=unet_block,
                                              norm_layer=norm_layer, use_dropout=use_dropout,
                                              use_pixel_shuffle=use_pixel_shuffle, use_res_skip=use_res_skip,
-                                             self_attention=True, capture_second=True)
+                                             self_attention=False, capture_second=True)
 
-        # continue building up
+        # 4. 24x24 層級（關鍵推薦）：開啟 SA
         unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8,
                                              input_nc=None, submodule=unet_block,
                                              norm_layer=norm_layer, use_pixel_shuffle=use_pixel_shuffle,
-                                             use_res_skip=use_res_skip, self_attention=False, capture_second=False)
+                                             use_res_skip=use_res_skip, self_attention=True, capture_second=False)
 
+        # 5. 48x48 層級：根據顯存決定，若要保險則設為 False
         unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4,
                                              input_nc=None, submodule=unet_block,
                                              norm_layer=norm_layer, use_pixel_shuffle=use_pixel_shuffle,
-                                             use_res_skip=use_res_skip, self_attention=False, capture_second=False)
+                                             use_res_skip=use_res_skip, self_attention=True, capture_second=False)
 
         unet_block = UnetSkipConnectionBlock(ngf, ngf * 2,
                                              input_nc=None, submodule=unet_block,

@@ -183,7 +183,11 @@ class Zi2ZiModel:
         d = float(self.d_loss.item())
 
         # --- heuristic schedule ---
-        if d < 0.02:
+        if d > 5.0:
+            # Emergency suppression: D loss exploded, cut adversarial weight to near-zero
+            # so G stops chasing D gradients and L1/const losses dominate recovery.
+            self.lambda_adv = 0.05
+        elif d < 0.02:
             self.lambda_adv = 0.20
         elif d < 0.08:
             self.lambda_adv = 0.35
