@@ -480,7 +480,8 @@ class Zi2ZiModel:
             cv2.imwrite(save_path, image)
 
     def sample(self, batch_data, basename, src_char_list=None, crop_src_font=False, canvas_size=256, resize_canvas=256,
-               filename_rule="seq", binary_image=True, anti_aliasing_strength=1, image_ext="png"):
+               filename_rule="seq", binary_image=True, anti_aliasing_strength=1, image_ext="png",
+               output_x_offset=0, output_y_offset=0):
         with torch.no_grad():
             labels, image_B, image_A = batch_data
             model_input_data = {'label': labels, 'A': image_A, 'B': image_B}
@@ -507,4 +508,9 @@ class Zi2ZiModel:
                 opencv_image = cv2.cvtColor(self.save_image(image_tensor), cv2.COLOR_BGR2GRAY)
                 processed_image = self.process_image(opencv_image, crop_src_font, canvas_size, resize_canvas,
                                                     anti_aliasing_strength, binary_image)
+                if output_x_offset != 0 or output_y_offset != 0:
+                    h, w = processed_image.shape[:2]
+                    M = np.float32([[1, 0, output_x_offset], [0, 1, output_y_offset]])
+                    processed_image = cv2.warpAffine(processed_image, M, (w, h),
+                                                     borderMode=cv2.BORDER_CONSTANT, borderValue=255)
                 self.save_image_to_disk(processed_image, label_dir, filename, image_ext)

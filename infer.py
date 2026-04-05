@@ -117,7 +117,8 @@ def infer(args):
             next(iter(dataloader)), infer_dir, src_char_list=valid_chars, crop_src_font=args.crop_src_font,
             canvas_size=args.canvas_size, resize_canvas=args.resize_canvas,
             filename_rule=args.filename_rule, binary_image=True, anti_aliasing_strength=args.anti_alias,
-            image_ext=args.image_ext
+            image_ext=args.image_ext,
+            output_x_offset=args.output_x_offset, output_y_offset=args.output_y_offset
         )
     t_finish = time.time()
     print(f'Cold start time: {t_finish - t0:.2f}')
@@ -150,6 +151,8 @@ if __name__ == '__main__':
     parser.add_argument('--self_attention', action='store_true', help='use self attention in generator')
     parser.add_argument('--skip_exist', action='store_true')
 
+    parser.add_argument('--output_x_offset', type=int, default=0, help='shift output image horizontally (positive=right)')
+    parser.add_argument('--output_y_offset', type=int, default=0, help='shift output image vertically (positive=down)')
     parser.add_argument('--src_font', type=str, default='')
     parser.add_argument('--src_font_x_offset', type=int, default=0)
     parser.add_argument('--src_font_y_offset', type=int, default=0)
